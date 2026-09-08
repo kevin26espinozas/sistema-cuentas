@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { PlusCircle, FileText, ShoppingBag, CreditCard, UserPlus, Pencil, Trash2, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { PlusCircle, FileText, ShoppingBag, CreditCard, UserPlus, Pencil, Trash2, Loader2, Search, Check, ChevronDown } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { generarEstadoCuentaPdf } from './utils/generatePdf';
 
@@ -8,6 +8,11 @@ export default function App() {
   const [clienteActivoId, setClienteActivoId] = useState('');
   const [movimientos, setMovimientos] = useState([]);
   const [cargando, setCargando] = useState(true);
+
+  // Estados del Buscador en tiempo real
+  const [busquedaCliente, setBusquedaCliente] = useState('');
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const dropdownRef = useRef(null);
 
   // Estados de Modales
   const [modalMovimiento, setModalMovimiento] = useState(false);
@@ -25,7 +30,18 @@ export default function App() {
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoTelefono, setNuevoTelefono] = useState('');
 
-  // 1. Cargar clientes y movimientos desde Supabase
+  // Cerrar el menú desplegable si se hace clic afuera
+  useEffect(() => {
+    const handleClickAfuera = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setMenuAbierto(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickAfuera);
+    return () => document.removeEventListener('mousedown', handleClickAfuera);
+  }, []);
+
+  // Cargar datos de Supabase
   const cargarDatos = async () => {
     setCargando(true);
     try {
@@ -49,7 +65,7 @@ export default function App() {
       if (errMov) throw errMov;
       setMovimientos(movsData || []);
     } catch (error) {
-      console.error('Error al cargar datos de Supabase:', error.message);
+      console.error('Error al cargar datos:', error.message);
     } finally {
       setCargando(false);
     }
@@ -59,11 +75,21 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  const clienteActivo = clientes.find((c) => c.id === clienteActivoId) || clientes[0];
+  const clienteActivo = clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
 
-  // Cálculo en tiempo real de saldos acumulados por cliente
+  // Filtro en tiempo real para el buscador de clientes
+  const clientesFiltrados = useMemo(() => {
+    if (!busquedaCliente.trim()) return clientes;
+    const termino = busquedaCliente.toLowerCase();
+    return clientes.filter((c) =>
+      c.nombre.toLowerCase().includes(termino) ||
+      (c.telefono && c.telefono.includes(termino))
+    );
+  }, [clientes, busquedaCliente]);
+
+  // Cálculo de totales y saldos acumulados
   const { listaFiltrada, totales } = useMemo(() => {
-    const filtrados = movimientos.filter((m) => m.cliente_id === clienteActivoId);
+    const filtrados = movimientos.filter((m) => String(m.cliente_id) === String(clienteActivoId));
     let acumulado = 0;
     let totalCompras = 0;
     let totalPagos = 0;
@@ -83,7 +109,6 @@ export default function App() {
     };
   }, [movimientos, clienteActivoId]);
 
-  // Abrir modal para crear nuevo registro
   const abrirModalNuevo = () => {
     setEditandoId(null);
     setTipoMov('Compra');
@@ -94,7 +119,6 @@ export default function App() {
     setModalMovimiento(true);
   };
 
-  // Abrir modal con datos cargados para editar
   const iniciarEdicion = (m) => {
     setEditandoId(m.id);
     setTipoMov(m.tipo);
@@ -105,7 +129,6 @@ export default function App() {
     setModalMovimiento(true);
   };
 
-  // Eliminar movimiento en Supabase
   const handleEliminar = async (id, detalle) => {
     if (window.confirm(`¿Estás seguro de eliminar el registro "${detalle}"?`)) {
       try {
@@ -118,7 +141,6 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento (Crear o Actualizar) en Supabase
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     const num = parseFloat(monto) || 0;
@@ -162,7 +184,6 @@ export default function App() {
     }
   };
 
-  // Guardar nuevo cliente en Supabase
   const handleGuardarCliente = async (e) => {
     e.preventDefault();
     if (!nuevoNombre.trim()) return;
@@ -181,6 +202,7 @@ export default function App() {
         setModalCliente(false);
         setNuevoNombre('');
         setNuevoTelefono('');
+        setBusquedaCliente('');
       }
     } catch (err) {
       alert('Error al crear cliente: ' + err.message);
@@ -200,7 +222,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800">
       <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Encabezado Principal */}
+        {/* Encabezado */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-2xl font-black text-[#1B365D] tracking-tight">CONTROL DE CLIENTES Y CUENTAS</h1>
@@ -234,25 +256,75 @@ export default function App() {
           </div>
         </header>
 
-        {/* Selector de Cliente y Tarjetas de Saldo */}
+        {/* Selector con Buscador Interactivo y Tarjetas */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-center">
-            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Cliente Activo</label>
-            {clientes.length > 0 ? (
-              <select
-                value={clienteActivoId}
-                onChange={(e) => setClienteActivoId(e.target.value)}
-                className="w-full text-base font-bold bg-amber-50 border border-amber-200 rounded-xl p-3 text-[#1B365D] outline-none cursor-pointer"
+          
+          {/* Componente Buscador de Clientes en Vivo */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative" ref={dropdownRef}>
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+              Buscar o Elegir Cliente
+            </label>
+
+            {/* Caja de Entrada con Filtro en Vivo */}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder={clienteActivo ? clienteActivo.nombre : 'Buscar cliente...'}
+                value={busquedaCliente}
+                onFocus={() => setMenuAbierto(true)}
+                onChange={(e) => {
+                  setBusquedaCliente(e.target.value);
+                  setMenuAbierto(true);
+                }}
+                className="w-full bg-amber-50/70 border border-amber-300 font-bold text-[#1B365D] rounded-xl pl-9 pr-8 py-2.5 outline-none focus:ring-2 focus:ring-amber-400 text-sm placeholder:text-slate-700"
+              />
+              <Search className="w-4 h-4 text-amber-700 absolute left-3 top-3.5" />
+              <button
+                type="button"
+                onClick={() => setMenuAbierto((prev) => !prev)}
+                className="absolute right-2 top-3 text-amber-700 hover:text-amber-900"
               >
-                {clientes.map((c) => (
-                  <option key={c.id} value={c.id}>{c.nombre}</option>
-                ))}
-              </select>
-            ) : (
-              <p className="text-sm font-semibold text-slate-400">Sin clientes registrados.</p>
+                <ChevronDown className={`w-4 h-4 transition-transform ${menuAbierto ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+
+            {/* Menú Flotante con Clientes Coincidentes */}
+            {menuAbierto && (
+              <div className="absolute left-0 right-0 top-[82px] bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto p-1 divide-y divide-slate-100">
+                {clientesFiltrados.length === 0 ? (
+                  <div className="p-3 text-center text-xs text-slate-400 font-semibold">
+                    No se encontró ningún cliente
+                  </div>
+                ) : (
+                  clientesFiltrados.map((c) => {
+                    const esSeleccionado = String(c.id) === String(clienteActivoId);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setClienteActivoId(c.id);
+                          setMenuAbierto(false);
+                          setBusquedaCliente('');
+                        }}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center justify-between text-sm transition-colors cursor-pointer ${
+                          esSeleccionado ? 'bg-amber-50 text-[#1B365D] font-bold' : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <p className="font-bold leading-tight">{c.nombre}</p>
+                          {c.telefono && <p className="text-[11px] text-slate-400">{c.telefono}</p>}
+                        </div>
+                        {esSeleccionado && <Check className="w-4 h-4 text-amber-600 shrink-0" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
 
+          {/* Tarjeta Total Compras */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4">
             <div className="p-3 bg-blue-50 text-[#1B365D] rounded-xl"><ShoppingBag className="w-6 h-6" /></div>
             <div>
@@ -261,6 +333,7 @@ export default function App() {
             </div>
           </div>
 
+          {/* Tarjeta Total Pagos */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4">
             <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl"><CreditCard className="w-6 h-6" /></div>
             <div>
@@ -269,6 +342,7 @@ export default function App() {
             </div>
           </div>
 
+          {/* Tarjeta Saldo Pendiente */}
           <div className="bg-red-50 p-4 rounded-2xl shadow-sm border border-red-200 flex items-center gap-4">
             <div>
               <p className="text-xs font-black text-red-600 uppercase">SALDO PENDIENTE</p>
@@ -277,7 +351,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Tabla de Movimientos */}
+        {/* Historial de Movimientos */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <h2 className="font-bold text-slate-700">
@@ -396,7 +470,7 @@ export default function App() {
                   <input
                     type="text"
                     required
-                    placeholder={tipoMov === 'Compra' ? 'Ej. Tenis Nike, Botas Ariat...' : 'Abono a cuenta'}
+                    placeholder={tipoMov === 'Compra' ? 'Ej. Sandalias, Tenis...' : 'Abono a cuenta'}
                     value={detalle}
                     onChange={(e) => setDetalle(e.target.value)}
                     className="w-full mt-1 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1B365D]"
