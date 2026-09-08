@@ -41,7 +41,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickAfuera);
   }, []);
 
-  // Cargar datos de Supabase
+  // Cargar clientes y movimientos desde Supabase
   const cargarDatos = async () => {
     setCargando(true);
     try {
@@ -75,9 +75,12 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  const clienteActivo = clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
+  // Cliente activo garantizado por coincidencia estricta de ID
+  const clienteActivo = useMemo(() => {
+    return clientes.find((c) => String(c.id) === String(clienteActivoId)) || null;
+  }, [clientes, clienteActivoId]);
 
-  // Filtro en tiempo real para el buscador de clientes
+  // Filtro en tiempo real para el buscador
   const clientesFiltrados = useMemo(() => {
     if (!busquedaCliente.trim()) return clientes;
     const termino = busquedaCliente.toLowerCase();
@@ -87,19 +90,34 @@ export default function App() {
     );
   }, [clientes, busquedaCliente]);
 
-  // Cálculo de totales y saldos acumulados
+  // Cálculo en tiempo real de saldos acumulados por cliente
   const { listaFiltrada, totales } = useMemo(() => {
-    const filtrados = movimientos.filter((m) => String(m.cliente_id) === String(clienteActivoId));
+    if (!clienteActivoId) {
+      return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
+    }
+
+    // 1. Filtrar únicamente los movimientos pertenecientes al cliente seleccionado
+    const filtrados = movimientos.filter(
+      (m) => String(m.cliente_id) === String(clienteActivoId)
+    );
+
+    // 2. Ordenar cronológicamente (más antiguos primero para acumular el saldo)
+    const ordenados = [...filtrados].sort((a, b) => {
+      const dateA = new Date(a.fecha || a.created_at);
+      const dateB = new Date(b.fecha || b.created_at);
+      return dateA - dateB;
+    });
+
     let acumulado = 0;
     let totalCompras = 0;
     let totalPagos = 0;
 
-    const conSaldo = filtrados.map((m) => {
+    const conSaldo = ordenados.map((m) => {
       const cargo = parseFloat(m.cargo) || 0;
       const abono = parseFloat(m.abono) || 0;
       totalCompras += cargo;
       totalPagos += abono;
-      acumulado += cargo - abono;
+      acumulado += (cargo - abono);
       return { ...m, cargo, abono, saldoAcumulado: acumulado };
     });
 
@@ -222,7 +240,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800">
       <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Encabezado */}
+        {/* Encabezado Principal */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-2xl font-black text-[#1B365D] tracking-tight">CONTROL DE CLIENTES Y CUENTAS</h1>
@@ -256,16 +274,15 @@ export default function App() {
           </div>
         </header>
 
-        {/* Selector con Buscador Interactivo y Tarjetas */}
+        {/* Buscador Interactivo y Tarjetas de Saldo */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           
-          {/* Componente Buscador de Clientes en Vivo */}
+          {/* Buscador de Clientes */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative" ref={dropdownRef}>
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
               Buscar o Elegir Cliente
             </label>
 
-            {/* Caja de Entrada con Filtro en Vivo */}
             <div className="relative">
               <input
                 type="text"
@@ -288,7 +305,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Menú Flotante con Clientes Coincidentes */}
+            {/* Menú Desplegable con resultados */}
             {menuAbierto && (
               <div className="absolute left-0 right-0 top-[82px] bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto p-1 divide-y divide-slate-100">
                 {clientesFiltrados.length === 0 ? (
@@ -342,11 +359,21 @@ export default function App() {
             </div>
           </div>
 
-          {/* Tarjeta Saldo Pendiente */}
-          <div className="bg-red-50 p-4 rounded-2xl shadow-sm border border-red-200 flex items-center gap-4">
+          {/* Tarjeta Saldo Inteligente (Pendiente o a Favor) */}
+          <div className={`p-4 rounded-2xl shadow-sm border flex items-center gap-4 ${
+            totales.saldo > 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'
+          }`}>
             <div>
-              <p className="text-xs font-black text-red-600 uppercase">SALDO PENDIENTE</p>
-              <p className="text-2xl font-black text-[#721C24]">L. {totales.saldo.toFixed(2)}</p>
+              <p className={`text-xs font-black uppercase ${
+                totales.saldo > 0 ? 'text-red-600' : 'text-emerald-700'
+              }`}>
+                {totales.saldo < 0 ? 'SALDO A FAVOR' : 'SALDO PENDIENTE'}
+              </p>
+              <p className={`text-2xl font-black ${
+                totales.saldo > 0 ? 'text-[#721C24]' : 'text-emerald-800'
+              }`}>
+                L. {Math.abs(totales.saldo).toFixed(2)}
+              </p>
             </div>
           </div>
         </section>
@@ -397,7 +424,9 @@ export default function App() {
                       <td className="p-4 font-semibold text-slate-800">{m.detalle}</td>
                       <td className="p-4 text-right font-medium">{m.cargo > 0 ? `L. ${m.cargo.toFixed(2)}` : '-'}</td>
                       <td className="p-4 text-right font-medium text-emerald-600">{m.abono > 0 ? `L. ${m.abono.toFixed(2)}` : '-'}</td>
-                      <td className="p-4 text-right font-bold text-[#721C24]">L. {m.saldoAcumulado.toFixed(2)}</td>
+                      <td className="p-4 text-right font-bold text-[#721C24]">
+                        {m.saldoAcumulado < 0 ? `(L. ${Math.abs(m.saldoAcumulado).toFixed(2)})` : `L. ${m.saldoAcumulado.toFixed(2)}`}
+                      </td>
                       <td className="p-4 text-slate-400 text-xs">{m.notas}</td>
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
