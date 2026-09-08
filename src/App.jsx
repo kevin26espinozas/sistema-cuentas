@@ -9,28 +9,28 @@ export default function App() {
   const [movimientos, setMovimientos] = useState([]);
   const [cargando, setCargando] = useState(true);
 
-  // Estados del Buscador en tiempo real
+  // Buscador de clientes
   const [busquedaCliente, setBusquedaCliente] = useState('');
   const [menuAbierto, setMenuAbierto] = useState(false);
   const dropdownRef = useRef(null);
 
-  // Estados de Modales
+  // Modales
   const [modalMovimiento, setModalMovimiento] = useState(false);
   const [modalCliente, setModalCliente] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
 
-  // Formulario de Movimiento
+  // Formulario Movimiento
   const [tipoMov, setTipoMov] = useState('Compra');
   const [fechaMov, setFechaMov] = useState('');
   const [detalle, setDetalle] = useState('');
   const [monto, setMonto] = useState('');
   const [notas, setNotas] = useState('');
 
-  // Formulario de Cliente
+  // Formulario Cliente
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoTelefono, setNuevoTelefono] = useState('');
 
-  // Cerrar el menú desplegable si se hace clic afuera
+  // Cerrar selector al hacer clic fuera
   useEffect(() => {
     const handleClickAfuera = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -41,7 +41,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickAfuera);
   }, []);
 
-  // Cargar clientes y movimientos desde Supabase
+  // Cargar datos al iniciar
   const cargarDatos = async () => {
     setCargando(true);
     try {
@@ -53,14 +53,16 @@ export default function App() {
       if (errCli) throw errCli;
 
       setClientes(clientesData || []);
-      if (clientesData && clientesData.length > 0 && !clienteActivoId) {
-        setClienteActivoId(clientesData[0].id);
+
+      // Fijar el primer cliente disponible
+      if (clientesData && clientesData.length > 0) {
+        setClienteActivoId((prev) => (prev ? prev : clientesData[0].id));
       }
 
       const { data: movsData, error: errMov } = await supabase
         .from('movimientos')
         .select('*')
-        .order('fecha', { ascending: true });
+        .order('created_at', { ascending: true });
 
       if (errMov) throw errMov;
       setMovimientos(movsData || []);
@@ -75,57 +77,57 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  // Cliente activo garantizado por coincidencia estricta de ID
+  // Cliente actualmente seleccionado
   const clienteActivo = useMemo(() => {
-    return clientes.find((c) => String(c.id) === String(clienteActivoId)) || null;
+    if (!clientes.length || !clienteActivoId) return null;
+    return clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
   }, [clientes, clienteActivoId]);
 
-  // Filtro en tiempo real para el buscador
+  // Filtro de búsqueda de clientes
   const clientesFiltrados = useMemo(() => {
     if (!busquedaCliente.trim()) return clientes;
-    const termino = busquedaCliente.toLowerCase();
-    return clientes.filter((c) =>
-      c.nombre.toLowerCase().includes(termino) ||
-      (c.telefono && c.telefono.includes(termino))
+    const q = busquedaCliente.toLowerCase();
+    return clientes.filter(
+      (c) => c.nombre.toLowerCase().includes(q) || (c.telefono && c.telefono.includes(q))
     );
   }, [clientes, busquedaCliente]);
 
-  // Cálculo en tiempo real de saldos acumulados por cliente
+  // FILTRADO ESTRICTO Y CÁLCULO DE SALDOS DEL CLIENTE ACTIVO
   const { listaFiltrada, totales } = useMemo(() => {
-    if (!clienteActivoId) {
+    if (!clienteActivo) {
       return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
     }
 
-    // 1. Filtrar únicamente los movimientos pertenecientes al cliente seleccionado
+    // Filtra EXCLUSIVAMENTE por el ID del cliente actual
     const filtrados = movimientos.filter(
-      (m) => String(m.cliente_id) === String(clienteActivoId)
+      (m) => String(m.cliente_id) === String(clienteActivo.id)
     );
 
-    // 2. Ordenar cronológicamente (más antiguos primero para acumular el saldo)
+    // Ordenar cronológicamente
     const ordenados = [...filtrados].sort((a, b) => {
-      const dateA = new Date(a.fecha || a.created_at);
-      const dateB = new Date(b.fecha || b.created_at);
-      return dateA - dateB;
+      const fA = new Date(a.fecha || a.created_at);
+      const fB = new Date(b.fecha || b.created_at);
+      return fA - fB;
     });
 
     let acumulado = 0;
-    let totalCompras = 0;
-    let totalPagos = 0;
+    let compras = 0;
+    let pagos = 0;
 
-    const conSaldo = ordenados.map((m) => {
+    const calculados = ordenados.map((m) => {
       const cargo = parseFloat(m.cargo) || 0;
       const abono = parseFloat(m.abono) || 0;
-      totalCompras += cargo;
-      totalPagos += abono;
+      compras += cargo;
+      pagos += abono;
       acumulado += (cargo - abono);
       return { ...m, cargo, abono, saldoAcumulado: acumulado };
     });
 
     return {
-      listaFiltrada: conSaldo,
-      totales: { compras: totalCompras, pagos: totalPagos, saldo: acumulado }
+      listaFiltrada: calculados,
+      totales: { compras, pagos, saldo: acumulado }
     };
-  }, [movimientos, clienteActivoId]);
+  }, [movimientos, clienteActivo]);
 
   const abrirModalNuevo = () => {
     setEditandoId(null);
@@ -148,26 +150,28 @@ export default function App() {
   };
 
   const handleEliminar = async (id, detalle) => {
-    if (window.confirm(`¿Estás seguro de eliminar el registro "${detalle}"?`)) {
+    if (window.confirm(`¿Eliminar "${detalle}"?`)) {
       try {
         const { error } = await supabase.from('movimientos').delete().eq('id', id);
         if (error) throw error;
         setMovimientos((prev) => prev.filter((m) => m.id !== id));
       } catch (err) {
-        alert('Error al eliminar: ' + err.message);
+        alert('Error: ' + err.message);
       }
     }
   };
 
+  // Guardar movimiento asignándolo explícitamente al clienteActivo.id
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
-    const num = parseFloat(monto) || 0;
+    if (!clienteActivo) return;
 
+    const num = parseFloat(monto) || 0;
     const payload = {
-      cliente_id: clienteActivoId,
+      cliente_id: clienteActivo.id,
       fecha: fechaMov || new Date().toISOString().split('T')[0],
       tipo: tipoMov,
-      detalle: detalle || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Producto'),
+      detalle: detalle.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Compra'),
       cargo: tipoMov === 'Compra' ? num : 0,
       abono: tipoMov === 'Pago' ? num : 0,
       notas: notas.trim()
@@ -198,7 +202,7 @@ export default function App() {
       }
       setModalMovimiento(false);
     } catch (err) {
-      alert('Error al procesar movimiento: ' + err.message);
+      alert('Error al guardar movimiento: ' + err.message);
     }
   };
 
@@ -231,7 +235,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-[#1B365D]" />
-        <p className="font-bold text-slate-600">Cargando base de datos...</p>
+        <p className="font-bold text-slate-600">Conectando con Supabase...</p>
       </div>
     );
   }
@@ -240,7 +244,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800">
       <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Encabezado Principal */}
+        {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-2xl font-black text-[#1B365D] tracking-tight">CONTROL DE CLIENTES Y CUENTAS</h1>
@@ -274,10 +278,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Buscador Interactivo y Tarjetas de Saldo */}
+        {/* Buscador y Resumen */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           
-          {/* Buscador de Clientes */}
+          {/* Buscador Reactivo */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative" ref={dropdownRef}>
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
               Buscar o Elegir Cliente
@@ -293,7 +297,7 @@ export default function App() {
                   setBusquedaCliente(e.target.value);
                   setMenuAbierto(true);
                 }}
-                className="w-full bg-amber-50/70 border border-amber-300 font-bold text-[#1B365D] rounded-xl pl-9 pr-8 py-2.5 outline-none focus:ring-2 focus:ring-amber-400 text-sm placeholder:text-slate-700"
+                className="w-full bg-amber-50/80 border border-amber-300 font-black text-[#1B365D] rounded-xl pl-9 pr-8 py-2.5 outline-none focus:ring-2 focus:ring-amber-400 text-sm placeholder:text-[#1B365D]"
               />
               <Search className="w-4 h-4 text-amber-700 absolute left-3 top-3.5" />
               <button
@@ -305,7 +309,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Menú Desplegable con resultados */}
+            {/* Desplegable */}
             {menuAbierto && (
               <div className="absolute left-0 right-0 top-[82px] bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto p-1 divide-y divide-slate-100">
                 {clientesFiltrados.length === 0 ? (
@@ -314,7 +318,7 @@ export default function App() {
                   </div>
                 ) : (
                   clientesFiltrados.map((c) => {
-                    const esSeleccionado = String(c.id) === String(clienteActivoId);
+                    const seleccionado = String(c.id) === String(clienteActivo?.id);
                     return (
                       <button
                         key={c.id}
@@ -325,14 +329,14 @@ export default function App() {
                           setBusquedaCliente('');
                         }}
                         className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center justify-between text-sm transition-colors cursor-pointer ${
-                          esSeleccionado ? 'bg-amber-50 text-[#1B365D] font-bold' : 'hover:bg-slate-50 text-slate-700'
+                          seleccionado ? 'bg-amber-100/70 text-[#1B365D] font-bold' : 'hover:bg-slate-50 text-slate-700'
                         }`}
                       >
                         <div>
                           <p className="font-bold leading-tight">{c.nombre}</p>
                           {c.telefono && <p className="text-[11px] text-slate-400">{c.telefono}</p>}
                         </div>
-                        {esSeleccionado && <Check className="w-4 h-4 text-amber-600 shrink-0" />}
+                        {seleccionado && <Check className="w-4 h-4 text-amber-700 shrink-0" />}
                       </button>
                     );
                   })
@@ -359,7 +363,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Tarjeta Saldo Inteligente (Pendiente o a Favor) */}
+          {/* Tarjeta Saldo Dinámico */}
           <div className={`p-4 rounded-2xl shadow-sm border flex items-center gap-4 ${
             totales.saldo > 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'
           }`}>
@@ -378,11 +382,11 @@ export default function App() {
           </div>
         </section>
 
-        {/* Historial de Movimientos */}
+        {/* Tabla de Movimientos Vinculada al Cliente Activo */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <h2 className="font-bold text-slate-700">
-              Historial de {clienteActivo ? clienteActivo.nombre : 'Cliente'}
+              Historial de <span className="text-[#1B365D] underline font-black">{clienteActivo ? clienteActivo.nombre : '...'}</span>
             </h2>
             <span className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold">
               {listaFiltrada.length} movimientos
@@ -454,12 +458,12 @@ export default function App() {
           </div>
         </section>
 
-        {/* Modal Registrar o Editar Movimiento */}
+        {/* Modal Movimiento */}
         {modalMovimiento && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
               <h3 className="text-xl font-black text-[#1B365D] mb-4">
-                {editandoId ? 'Editar Movimiento' : 'Nuevo Registro'}
+                {editandoId ? 'Editar Movimiento' : `Nuevo Registro (${clienteActivo?.nombre})`}
               </h3>
               <form onSubmit={handleGuardarMovimiento} className="space-y-4">
                 <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
@@ -550,7 +554,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Modal Crear Nuevo Cliente */}
+        {/* Modal Nuevo Cliente */}
         {modalCliente && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
