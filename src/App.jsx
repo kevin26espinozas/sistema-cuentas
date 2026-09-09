@@ -1,5 +1,19 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { PlusCircle, FileText, ShoppingBag, CreditCard, UserPlus, Pencil, Trash2, Loader2, Search, Check, ChevronDown } from 'lucide-react';
+import { 
+  PlusCircle, 
+  FileText, 
+  ShoppingBag, 
+  CreditCard, 
+  UserPlus, 
+  Pencil, 
+  Trash2, 
+  Loader2, 
+  Search, 
+  Check, 
+  ChevronDown, 
+  Plus, 
+  X 
+} from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { generarEstadoCuentaPdf } from './utils/generatePdf';
 
@@ -22,15 +36,20 @@ export default function App() {
   // Formulario Movimiento
   const [tipoMov, setTipoMov] = useState('Compra');
   const [fechaMov, setFechaMov] = useState('');
-  const [detalle, setDetalle] = useState('');
-  const [monto, setMonto] = useState('');
   const [notas, setNotas] = useState('');
+
+  // Lista dinámica de productos para compras múltiples
+  const [itemsCompra, setItemsCompra] = useState([{ detalle: '', monto: '' }]);
+
+  // Campos para modo Pago (Abono) o Edición
+  const [detalleSimple, setDetalleSimple] = useState('');
+  const [montoSimple, setMontoSimple] = useState('');
 
   // Formulario Cliente
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoTelefono, setNuevoTelefono] = useState('');
 
-  // Cerrar selector al hacer clic fuera
+  // Cerrar desplegable si se hace clic fuera
   useEffect(() => {
     const handleClickAfuera = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -54,7 +73,6 @@ export default function App() {
 
       setClientes(clientesData || []);
 
-      // Fijar el primer cliente disponible
       if (clientesData && clientesData.length > 0) {
         setClienteActivoId((prev) => (prev ? prev : clientesData[0].id));
       }
@@ -77,7 +95,7 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  // Cliente actualmente seleccionado
+  // Cliente seleccionado garantizado por coincidencia estricta de ID
   const clienteActivo = useMemo(() => {
     if (!clientes.length || !clienteActivoId) return null;
     return clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
@@ -92,18 +110,16 @@ export default function App() {
     );
   }, [clientes, busquedaCliente]);
 
-  // FILTRADO ESTRICTO Y CÁLCULO DE SALDOS DEL CLIENTE ACTIVO
+  // FILTRADO ESTRICTO Y CÁLCULO DE SALDOS
   const { listaFiltrada, totales } = useMemo(() => {
     if (!clienteActivo) {
       return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
     }
 
-    // Filtra EXCLUSIVAMENTE por el ID del cliente actual
     const filtrados = movimientos.filter(
       (m) => String(m.cliente_id) === String(clienteActivo.id)
     );
 
-    // Ordenar cronológicamente
     const ordenados = [...filtrados].sort((a, b) => {
       const fA = new Date(a.fecha || a.created_at);
       const fB = new Date(b.fecha || b.created_at);
@@ -129,26 +145,53 @@ export default function App() {
     };
   }, [movimientos, clienteActivo]);
 
+  // Total acumulado dinámico de los productos añadidos en el modal
+  const totalCompraMultiple = useMemo(() => {
+    return itemsCompra.reduce((acc, curr) => acc + (parseFloat(curr.monto) || 0), 0);
+  }, [itemsCompra]);
+
+  // Abrir modal para nuevo movimiento
   const abrirModalNuevo = () => {
     setEditandoId(null);
     setTipoMov('Compra');
     setFechaMov(new Date().toISOString().split('T')[0]);
-    setDetalle('');
-    setMonto('');
+    setItemsCompra([{ detalle: '', monto: '' }]);
+    setDetalleSimple('');
+    setMontoSimple('');
     setNotas('');
     setModalMovimiento(true);
   };
 
+  // Funciones para manejar la lista de múltiples productos
+  const agregarFilaProducto = () => {
+    setItemsCompra((prev) => [...prev, { detalle: '', monto: '' }]);
+  };
+
+  const eliminarFilaProducto = (index) => {
+    if (itemsCompra.length === 1) return;
+    setItemsCompra((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const actualizarFilaProducto = (index, campo, valor) => {
+    setItemsCompra((prev) => {
+      const copia = [...prev];
+      copia[index][campo] = valor;
+      return copia;
+    });
+  };
+
+  // Abrir modal para editar movimiento existente
   const iniciarEdicion = (m) => {
     setEditandoId(m.id);
     setTipoMov(m.tipo);
     setFechaMov(m.fecha);
-    setDetalle(m.detalle);
-    setMonto(m.tipo === 'Compra' ? m.cargo.toString() : m.abono.toString());
+    setDetalleSimple(m.detalle);
+    setMontoSimple(m.tipo === 'Compra' ? m.cargo.toString() : m.abono.toString());
     setNotas(m.notas || '');
     setModalMovimiento(true);
   };
 
+  // Eliminar movimiento
   const handleEliminar = async (id, detalle) => {
     if (window.confirm(`¿Eliminar "${detalle}"?`)) {
       try {
@@ -161,24 +204,27 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento asignándolo explícitamente al clienteActivo.id
+  // Guardar movimiento(s)
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
 
-    const num = parseFloat(monto) || 0;
-    const payload = {
-      cliente_id: clienteActivo.id,
-      fecha: fechaMov || new Date().toISOString().split('T')[0],
-      tipo: tipoMov,
-      detalle: detalle.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Compra'),
-      cargo: tipoMov === 'Compra' ? num : 0,
-      abono: tipoMov === 'Pago' ? num : 0,
-      notas: notas.trim()
-    };
+    const fechaFinal = fechaMov || new Date().toISOString().split('T')[0];
 
     try {
       if (editandoId) {
+        // Modo Edición
+        const num = parseFloat(montoSimple) || 0;
+        const payload = {
+          cliente_id: clienteActivo.id,
+          fecha: fechaFinal,
+          tipo: tipoMov,
+          detalle: detalleSimple.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Producto'),
+          cargo: tipoMov === 'Compra' ? num : 0,
+          abono: tipoMov === 'Pago' ? num : 0,
+          notas: notas.trim()
+        };
+
         const { data, error } = await supabase
           .from('movimientos')
           .update(payload)
@@ -189,7 +235,52 @@ export default function App() {
         if (data && data.length > 0) {
           setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? data[0] : m)));
         }
+      } else if (tipoMov === 'Compra') {
+        // Guardar múltiples productos en una sola transacción
+        const filasValidas = itemsCompra.filter((item) => item.detalle.trim() && parseFloat(item.monto) > 0);
+
+        if (filasValidas.length === 0) {
+          alert('Por favor ingresa al menos un producto con descripción y monto válido.');
+          return;
+        }
+
+        const payloads = filasValidas.map((item) => ({
+          cliente_id: clienteActivo.id,
+          fecha: fechaFinal,
+          tipo: 'Compra',
+          detalle: item.detalle.trim(),
+          cargo: parseFloat(item.monto) || 0,
+          abono: 0,
+          notas: notas.trim()
+        }));
+
+        const { data, error } = await supabase
+          .from('movimientos')
+          .insert(payloads)
+          .select();
+
+        if (error) throw error;
+        if (data && data.length > 0) {
+          setMovimientos((prev) => [...prev, ...data]);
+        }
       } else {
+        // Guardar Abono / Pago individual
+        const num = parseFloat(montoSimple) || 0;
+        if (num <= 0) {
+          alert('Por favor ingresa un monto válido para el abono.');
+          return;
+        }
+
+        const payload = {
+          cliente_id: clienteActivo.id,
+          fecha: fechaFinal,
+          tipo: 'Pago',
+          detalle: detalleSimple.trim() || 'Abono a cuenta',
+          cargo: 0,
+          abono: num,
+          notas: notas.trim()
+        };
+
         const { data, error } = await supabase
           .from('movimientos')
           .insert([payload])
@@ -200,12 +291,14 @@ export default function App() {
           setMovimientos((prev) => [...prev, data[0]]);
         }
       }
+
       setModalMovimiento(false);
     } catch (err) {
       alert('Error al guardar movimiento: ' + err.message);
     }
   };
 
+  // Guardar nuevo cliente
   const handleGuardarCliente = async (e) => {
     e.preventDefault();
     if (!nuevoNombre.trim()) return;
@@ -244,7 +337,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800">
       <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Header */}
+        {/* Encabezado */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-2xl font-black text-[#1B365D] tracking-tight">CONTROL DE CLIENTES Y CUENTAS</h1>
@@ -278,7 +371,7 @@ export default function App() {
           </div>
         </header>
 
-        {/* Buscador y Resumen */}
+        {/* Buscador y Tarjetas de Saldo */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           
           {/* Buscador Reactivo */}
@@ -309,7 +402,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Desplegable */}
+            {/* Menú Desplegable */}
             {menuAbierto && (
               <div className="absolute left-0 right-0 top-[82px] bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto p-1 divide-y divide-slate-100">
                 {clientesFiltrados.length === 0 ? (
@@ -363,7 +456,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Tarjeta Saldo Dinámico */}
+          {/* Tarjeta Saldo Inteligente */}
           <div className={`p-4 rounded-2xl shadow-sm border flex items-center gap-4 ${
             totales.saldo > 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'
           }`}>
@@ -382,7 +475,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Tabla de Movimientos Vinculada al Cliente Activo */}
+        {/* Historial de Movimientos */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
             <h2 className="font-bold text-slate-700">
@@ -458,35 +551,44 @@ export default function App() {
           </div>
         </section>
 
-        {/* Modal Movimiento */}
+        {/* Modal Registrar o Editar Movimiento (Con soporte multi-producto) */}
         {modalMovimiento && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
-              <h3 className="text-xl font-black text-[#1B365D] mb-4">
-                {editandoId ? 'Editar Movimiento' : `Nuevo Registro (${clienteActivo?.nombre})`}
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-slate-200 my-8">
+              <h3 className="text-xl font-black text-[#1B365D] mb-1">
+                {editandoId ? 'Editar Movimiento' : 'Registrar Transacción'}
               </h3>
-              <form onSubmit={handleGuardarMovimiento} className="space-y-4">
-                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => setTipoMov('Compra')}
-                    className={`py-2 font-bold text-sm rounded-lg transition-all cursor-pointer ${
-                      tipoMov === 'Compra' ? 'bg-[#1B365D] text-white shadow' : 'text-slate-600'
-                    }`}
-                  >
-                    Compra (Cargo)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTipoMov('Pago')}
-                    className={`py-2 font-bold text-sm rounded-lg transition-all cursor-pointer ${
-                      tipoMov === 'Pago' ? 'bg-emerald-600 text-white shadow' : 'text-slate-600'
-                    }`}
-                  >
-                    Abono (Pago)
-                  </button>
-                </div>
+              <p className="text-xs text-slate-500 mb-4 font-semibold">
+                Cliente: <span className="text-[#1B365D] font-bold">{clienteActivo?.nombre}</span>
+              </p>
 
+              <form onSubmit={handleGuardarMovimiento} className="space-y-4">
+                
+                {/* Selector Tipo de Movimiento (Solo al crear nuevo) */}
+                {!editandoId && (
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setTipoMov('Compra')}
+                      className={`py-2 font-bold text-sm rounded-lg transition-all cursor-pointer ${
+                        tipoMov === 'Compra' ? 'bg-[#1B365D] text-white shadow' : 'text-slate-600'
+                      }`}
+                    >
+                      Compra (Productos)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTipoMov('Pago')}
+                      className={`py-2 font-bold text-sm rounded-lg transition-all cursor-pointer ${
+                        tipoMov === 'Pago' ? 'bg-emerald-600 text-white shadow' : 'text-slate-600'
+                      }`}
+                    >
+                      Abono (Pago a cuenta)
+                    </button>
+                  </div>
+                )}
+
+                {/* Fecha */}
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase">Fecha</label>
                   <input
@@ -498,36 +600,104 @@ export default function App() {
                   />
                 </div>
 
+                {/* SECCIÓN 1: Venta con Múltiples Productos */}
+                {!editandoId && tipoMov === 'Compra' ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        Lista de Productos ({itemsCompra.length})
+                      </label>
+                      <button
+                        type="button"
+                        onClick={agregarFilaProducto}
+                        className="flex items-center gap-1 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Agregar otro producto</span>
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {itemsCompra.map((item, index) => (
+                        <div key={index} className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                          <input
+                            type="text"
+                            required
+                            placeholder={`Producto #${index + 1} (ej. Zapatos, Sandalias...)`}
+                            value={item.detalle}
+                            onChange={(e) => actualizarFilaProducto(index, 'detalle', e.target.value)}
+                            className="flex-1 p-2 bg-white border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-[#1B365D]"
+                          />
+                          <div className="w-28 relative">
+                            <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">L.</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              required
+                              placeholder="0.00"
+                              value={item.monto}
+                              onChange={(e) => actualizarFilaProducto(index, 'monto', e.target.value)}
+                              className="w-full pl-7 pr-2 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-[#1B365D]"
+                            />
+                          </div>
+                          {itemsCompra.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => eliminarFilaProducto(index)}
+                              className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg cursor-pointer"
+                              title="Quitar este producto"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Total acumulado de la compra */}
+                    <div className="flex justify-between items-center bg-blue-50/70 p-3 rounded-xl border border-blue-200">
+                      <span className="text-xs font-black text-[#1B365D] uppercase">Total de esta compra:</span>
+                      <span className="text-lg font-black text-[#1B365D]">L. {totalCompraMultiple.toFixed(2)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  /* SECCIÓN 2: Abono Simple o Modo Edición */
+                  <>
+                    <div>
+                      <label className="text-xs font-bold text-slate-500 uppercase">
+                        {tipoMov === 'Pago' ? 'Detalle del Abono' : 'Detalle del Producto'}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder={tipoMov === 'Pago' ? 'Abono a cuenta' : 'Ej. Sandalias, Tenis...'}
+                        value={detalleSimple}
+                        onChange={(e) => setDetalleSimple(e.target.value)}
+                        className="w-full mt-1 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1B365D]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-500 uppercase">Monto (Lempiras)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        required
+                        placeholder="0.00"
+                        value={montoSimple}
+                        onChange={(e) => setMontoSimple(e.target.value)}
+                        className="w-full mt-1 p-3 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:ring-2 focus:ring-[#1B365D]"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Notas generales */}
                 <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase">Detalle o Producto</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Notas o Comentarios (Opcional)</label>
                   <input
                     type="text"
-                    required
-                    placeholder={tipoMov === 'Compra' ? 'Ej. Sandalias, Tenis...' : 'Abono a cuenta'}
-                    value={detalle}
-                    onChange={(e) => setDetalle(e.target.value)}
-                    className="w-full mt-1 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1B365D]"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase">Monto (Lempiras)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    placeholder="0.00"
-                    value={monto}
-                    onChange={(e) => setMonto(e.target.value)}
-                    className="w-full mt-1 p-3 border border-slate-200 rounded-xl text-lg font-bold outline-none focus:ring-2 focus:ring-[#1B365D]"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase">Notas</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. Efectivo, Transferencia, Depósito..."
+                    placeholder="Ej. Pagó en efectivo, Transferencia BAC, Entrega viernes..."
                     value={notas}
                     onChange={(e) => setNotas(e.target.value)}
                     className="w-full mt-1 p-3 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1B365D]"
@@ -546,7 +716,11 @@ export default function App() {
                     type="submit"
                     className="flex-1 py-3 bg-[#1B365D] text-white font-bold rounded-xl shadow-md active:scale-95 transition-transform cursor-pointer"
                   >
-                    {editandoId ? 'Actualizar' : 'Guardar'}
+                    {editandoId 
+                      ? 'Actualizar' 
+                      : tipoMov === 'Compra' && itemsCompra.length > 1 
+                        ? `Guardar (${itemsCompra.length} productos)` 
+                        : 'Guardar'}
                   </button>
                 </div>
               </form>
@@ -554,7 +728,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Modal Nuevo Cliente */}
+        {/* Modal Crear Nuevo Cliente */}
         {modalCliente && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
