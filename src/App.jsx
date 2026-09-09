@@ -12,7 +12,8 @@ import {
   Check, 
   ChevronDown, 
   Plus, 
-  X 
+  X,
+  CheckCircle2
 } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { generarEstadoCuentaPdf } from './utils/generatePdf';
@@ -22,6 +23,9 @@ export default function App() {
   const [clienteActivoId, setClienteActivoId] = useState('');
   const [movimientos, setMovimientos] = useState([]);
   const [cargando, setCargando] = useState(true);
+
+  // Estado para la notificación flotante (Toast de éxito)
+  const [notificacion, setNotificacion] = useState(null);
 
   // Buscador de clientes
   const [busquedaCliente, setBusquedaCliente] = useState('');
@@ -48,6 +52,14 @@ export default function App() {
   // Formulario Cliente
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoTelefono, setNuevoTelefono] = useState('');
+
+  // Función para mostrar mensajes de éxito flotantes
+  const mostrarExito = (mensaje) => {
+    setNotificacion(mensaje);
+    setTimeout(() => {
+      setNotificacion(null);
+    }, 3200);
+  };
 
   // Cerrar desplegable si se hace clic fuera
   useEffect(() => {
@@ -95,7 +107,7 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  // Cliente seleccionado garantizado por coincidencia estricta de ID
+  // Cliente activo garantizado por coincidencia de ID
   const clienteActivo = useMemo(() => {
     if (!clientes.length || !clienteActivoId) return null;
     return clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
@@ -110,7 +122,7 @@ export default function App() {
     );
   }, [clientes, busquedaCliente]);
 
-  // FILTRADO ESTRICTO Y CÁLCULO DE SALDOS
+  // Filtrado estricto y cálculo de saldos
   const { listaFiltrada, totales } = useMemo(() => {
     if (!clienteActivo) {
       return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
@@ -198,6 +210,7 @@ export default function App() {
         const { error } = await supabase.from('movimientos').delete().eq('id', id);
         if (error) throw error;
         setMovimientos((prev) => prev.filter((m) => m.id !== id));
+        mostrarExito(`Se eliminó "${detalle}" correctamente.`);
       } catch (err) {
         alert('Error: ' + err.message);
       }
@@ -235,8 +248,10 @@ export default function App() {
         if (data && data.length > 0) {
           setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? data[0] : m)));
         }
+        setModalMovimiento(false);
+        mostrarExito('¡Movimiento actualizado con éxito!');
       } else if (tipoMov === 'Compra') {
-        // Guardar múltiples productos en una sola transacción
+        // Guardar múltiples productos
         const filasValidas = itemsCompra.filter((item) => item.detalle.trim() && parseFloat(item.monto) > 0);
 
         if (filasValidas.length === 0) {
@@ -263,8 +278,13 @@ export default function App() {
         if (data && data.length > 0) {
           setMovimientos((prev) => [...prev, ...data]);
         }
+        setModalMovimiento(false);
+        const mensaje = filasValidas.length === 1 
+          ? '¡Producto guardado con éxito!' 
+          : `¡${filasValidas.length} productos guardados con éxito!`;
+        mostrarExito(mensaje);
       } else {
-        // Guardar Abono / Pago individual
+        // Guardar Abono / Pago
         const num = parseFloat(montoSimple) || 0;
         if (num <= 0) {
           alert('Por favor ingresa un monto válido para el abono.');
@@ -290,9 +310,9 @@ export default function App() {
         if (data && data.length > 0) {
           setMovimientos((prev) => [...prev, data[0]]);
         }
+        setModalMovimiento(false);
+        mostrarExito('¡Abono registrado con éxito!');
       }
-
-      setModalMovimiento(false);
     } catch (err) {
       alert('Error al guardar movimiento: ' + err.message);
     }
@@ -318,6 +338,7 @@ export default function App() {
         setNuevoNombre('');
         setNuevoTelefono('');
         setBusquedaCliente('');
+        mostrarExito(`¡Cliente "${data[0].nombre}" creado con éxito!`);
       }
     } catch (err) {
       alert('Error al crear cliente: ' + err.message);
@@ -334,7 +355,16 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800">
+    <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800 relative">
+      
+      {/* Notificación Toast Flotante Elegante */}
+      {notificacion && (
+        <div className="fixed top-5 right-5 z-[100] flex items-center gap-3 bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-2xl animate-bounce border border-emerald-400">
+          <CheckCircle2 className="w-5 h-5 text-white shrink-0" />
+          <span className="font-bold text-sm tracking-wide">{notificacion}</span>
+        </div>
+      )}
+
       <div className="max-w-6xl mx-auto space-y-6">
 
         {/* Encabezado */}
@@ -564,7 +594,7 @@ export default function App() {
 
               <form onSubmit={handleGuardarMovimiento} className="space-y-4">
                 
-                {/* Selector Tipo de Movimiento (Solo al crear nuevo) */}
+                {/* Selector Tipo de Movimiento */}
                 {!editandoId && (
                   <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
                     <button
