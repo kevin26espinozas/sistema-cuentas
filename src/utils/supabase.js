@@ -1,14 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = 'https://ayapdglkahicqomtyiza.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5YXBkZ2xrYWhpY3FvbXR5aXphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NzQ0MjYsImV4cCI6MjEwNDE1MDQyNn0.LjWKCT5uk7YPJ1HOP41b_v86Rr1s3QOtgmFIKvCG__4';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  global: {
-    headers: {
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    }
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true
   }
 });
