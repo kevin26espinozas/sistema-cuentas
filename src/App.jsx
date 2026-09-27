@@ -24,7 +24,7 @@ export default function App() {
   const [movimientos, setMovimientos] = useState([]);
   const [cargando, setCargando] = useState(true);
 
-  // Estado para la notificación flotante (Toast de éxito)
+  // Toast flotante de éxito
   const [notificacion, setNotificacion] = useState(null);
 
   // Buscador de clientes
@@ -42,10 +42,10 @@ export default function App() {
   const [fechaMov, setFechaMov] = useState('');
   const [notas, setNotas] = useState('');
 
-  // Lista dinámica de productos para compras múltiples
+  // Lista de múltiples productos
   const [itemsCompra, setItemsCompra] = useState([{ detalle: '', monto: '' }]);
 
-  // Campos para modo Pago (Abono) o Edición
+  // Campos para Abono o Edición
   const [detalleSimple, setDetalleSimple] = useState('');
   const [montoSimple, setMontoSimple] = useState('');
 
@@ -53,7 +53,7 @@ export default function App() {
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevoTelefono, setNuevoTelefono] = useState('');
 
-  // Función para mostrar mensajes de éxito flotantes
+  // Notificación de éxito temporal
   const mostrarExito = (mensaje) => {
     setNotificacion(mensaje);
     setTimeout(() => {
@@ -61,7 +61,7 @@ export default function App() {
     }, 3200);
   };
 
-  // Cerrar desplegable si se hace clic fuera
+  // Cerrar menú desplegable al hacer clic fuera
   useEffect(() => {
     const handleClickAfuera = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -72,7 +72,7 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickAfuera);
   }, []);
 
-  // Cargar datos al iniciar
+  // Cargar datos desde Supabase
   const cargarDatos = async () => {
     setCargando(true);
     try {
@@ -83,19 +83,35 @@ export default function App() {
 
       if (errCli) throw errCli;
 
-      setClientes(clientesData || []);
+      // Normalizar clientes
+      const clientesNormalizados = (clientesData || []).map((c) => ({
+        ...c,
+        id: c.identificación || c.id,
+        telefono: c['teléfono'] || c.telefono || ''
+      }));
 
-      if (clientesData && clientesData.length > 0) {
-        setClienteActivoId((prev) => (prev ? prev : clientesData[0].id));
+      setClientes(clientesNormalizados);
+
+      if (clientesNormalizados.length > 0) {
+        setClienteActivoId((prev) => (prev ? prev : clientesNormalizados[0].id));
       }
 
       const { data: movsData, error: errMov } = await supabase
         .from('movimientos')
-        .select('*')
-        .order('created_at', { ascending: true });
+        .select('*');
 
       if (errMov) throw errMov;
-      setMovimientos(movsData || []);
+
+      // Normalizar movimientos con 'id_cliente' y 'carga'
+      const movsNormalizados = (movsData || []).map((m) => ({
+        ...m,
+        id: m.identificación || m.id,
+        cliente_id: m.id_cliente || m.cliente_id,
+        cargo: parseFloat(m.carga !== undefined ? m.carga : m.cargo) || 0,
+        abono: parseFloat(m.abono) || 0
+      }));
+
+      setMovimientos(movsNormalizados);
     } catch (error) {
       console.error('Error al cargar datos:', error.message);
     } finally {
@@ -107,13 +123,13 @@ export default function App() {
     cargarDatos();
   }, []);
 
-  // Cliente activo garantizado por coincidencia de ID
+  // Cliente activo
   const clienteActivo = useMemo(() => {
     if (!clientes.length || !clienteActivoId) return null;
     return clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
   }, [clientes, clienteActivoId]);
 
-  // Filtro de búsqueda de clientes
+  // Filtro en tiempo real para el buscador
   const clientesFiltrados = useMemo(() => {
     if (!busquedaCliente.trim()) return clientes;
     const q = busquedaCliente.toLowerCase();
@@ -128,13 +144,15 @@ export default function App() {
       return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
     }
 
+    // Filtrar únicamente los movimientos que pertenezcan al id_cliente seleccionado
     const filtrados = movimientos.filter(
       (m) => String(m.cliente_id) === String(clienteActivo.id)
     );
 
+    // Ordenar cronológicamente
     const ordenados = [...filtrados].sort((a, b) => {
-      const fA = new Date(a.fecha || a.created_at);
-      const fB = new Date(b.fecha || b.created_at);
+      const fA = new Date(a.fecha || a.creado_en || a.created_at);
+      const fB = new Date(b.fecha || b.creado_en || b.created_at);
       return fA - fB;
     });
 
@@ -143,8 +161,8 @@ export default function App() {
     let pagos = 0;
 
     const calculados = ordenados.map((m) => {
-      const cargo = parseFloat(m.cargo) || 0;
-      const abono = parseFloat(m.abono) || 0;
+      const cargo = m.cargo || 0;
+      const abono = m.abono || 0;
       compras += cargo;
       pagos += abono;
       acumulado += (cargo - abono);
@@ -157,12 +175,11 @@ export default function App() {
     };
   }, [movimientos, clienteActivo]);
 
-  // Total acumulado dinámico de los productos añadidos en el modal
+  // Total acumulado dinámico de los productos añadidos
   const totalCompraMultiple = useMemo(() => {
     return itemsCompra.reduce((acc, curr) => acc + (parseFloat(curr.monto) || 0), 0);
   }, [itemsCompra]);
 
-  // Abrir modal para nuevo movimiento
   const abrirModalNuevo = () => {
     setEditandoId(null);
     setTipoMov('Compra');
@@ -174,7 +191,6 @@ export default function App() {
     setModalMovimiento(true);
   };
 
-  // Funciones para manejar la lista de múltiples productos
   const agregarFilaProducto = () => {
     setItemsCompra((prev) => [...prev, { detalle: '', monto: '' }]);
   };
@@ -192,7 +208,6 @@ export default function App() {
     });
   };
 
-  // Abrir modal para editar movimiento existente
   const iniciarEdicion = (m) => {
     setEditandoId(m.id);
     setTipoMov(m.tipo);
@@ -203,21 +218,24 @@ export default function App() {
     setModalMovimiento(true);
   };
 
-  // Eliminar movimiento
   const handleEliminar = async (id, detalle) => {
     if (window.confirm(`¿Eliminar "${detalle}"?`)) {
       try {
-        const { error } = await supabase.from('movimientos').delete().eq('id', id);
+        const { error } = await supabase
+          .from('movimientos')
+          .delete()
+          .or(`id.eq.${id},identificación.eq.${id}`);
+
         if (error) throw error;
         setMovimientos((prev) => prev.filter((m) => m.id !== id));
         mostrarExito(`Se eliminó "${detalle}" correctamente.`);
       } catch (err) {
-        alert('Error: ' + err.message);
+        alert('Error al eliminar: ' + err.message);
       }
     }
   };
 
-  // Guardar movimiento(s)
+  // Guardar movimiento con los nombres exactos de columnas
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
@@ -226,13 +244,14 @@ export default function App() {
 
     try {
       if (editandoId) {
-        // Modo Edición
         const num = parseFloat(montoSimple) || 0;
         const payload = {
+          id_cliente: clienteActivo.id,
           cliente_id: clienteActivo.id,
           fecha: fechaFinal,
           tipo: tipoMov,
           detalle: detalleSimple.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Producto'),
+          carga: tipoMov === 'Compra' ? num : 0,
           cargo: tipoMov === 'Compra' ? num : 0,
           abono: tipoMov === 'Pago' ? num : 0,
           notas: notas.trim()
@@ -241,17 +260,23 @@ export default function App() {
         const { data, error } = await supabase
           .from('movimientos')
           .update(payload)
-          .eq('id', editandoId)
+          .or(`id.eq.${editandoId},identificación.eq.${editandoId}`)
           .select();
 
         if (error) throw error;
         if (data && data.length > 0) {
-          setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? data[0] : m)));
+          const itemActualizado = {
+            ...data[0],
+            id: data[0].identificación || data[0].id,
+            cliente_id: data[0].id_cliente || data[0].cliente_id,
+            cargo: parseFloat(data[0].carga !== undefined ? data[0].carga : data[0].cargo) || 0,
+            abono: parseFloat(data[0].abono) || 0
+          };
+          setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? itemActualizado : m)));
         }
         setModalMovimiento(false);
         mostrarExito('¡Movimiento actualizado con éxito!');
       } else if (tipoMov === 'Compra') {
-        // Guardar múltiples productos
         const filasValidas = itemsCompra.filter((item) => item.detalle.trim() && parseFloat(item.monto) > 0);
 
         if (filasValidas.length === 0) {
@@ -260,10 +285,12 @@ export default function App() {
         }
 
         const payloads = filasValidas.map((item) => ({
+          id_cliente: clienteActivo.id,
           cliente_id: clienteActivo.id,
           fecha: fechaFinal,
           tipo: 'Compra',
           detalle: item.detalle.trim(),
+          carga: parseFloat(item.monto) || 0,
           cargo: parseFloat(item.monto) || 0,
           abono: 0,
           notas: notas.trim()
@@ -276,7 +303,14 @@ export default function App() {
 
         if (error) throw error;
         if (data && data.length > 0) {
-          setMovimientos((prev) => [...prev, ...data]);
+          const itemsNuevos = data.map((d) => ({
+            ...d,
+            id: d.identificación || d.id,
+            cliente_id: d.id_cliente || d.cliente_id,
+            cargo: parseFloat(d.carga !== undefined ? d.carga : d.cargo) || 0,
+            abono: parseFloat(d.abono) || 0
+          }));
+          setMovimientos((prev) => [...prev, ...itemsNuevos]);
         }
         setModalMovimiento(false);
         const mensaje = filasValidas.length === 1 
@@ -284,7 +318,6 @@ export default function App() {
           : `¡${filasValidas.length} productos guardados con éxito!`;
         mostrarExito(mensaje);
       } else {
-        // Guardar Abono / Pago
         const num = parseFloat(montoSimple) || 0;
         if (num <= 0) {
           alert('Por favor ingresa un monto válido para el abono.');
@@ -292,10 +325,12 @@ export default function App() {
         }
 
         const payload = {
+          id_cliente: clienteActivo.id,
           cliente_id: clienteActivo.id,
           fecha: fechaFinal,
           tipo: 'Pago',
           detalle: detalleSimple.trim() || 'Abono a cuenta',
+          carga: 0,
           cargo: 0,
           abono: num,
           notas: notas.trim()
@@ -308,7 +343,14 @@ export default function App() {
 
         if (error) throw error;
         if (data && data.length > 0) {
-          setMovimientos((prev) => [...prev, data[0]]);
+          const itemNuevo = {
+            ...data[0],
+            id: data[0].identificación || data[0].id,
+            cliente_id: data[0].id_cliente || data[0].cliente_id,
+            cargo: 0,
+            abono: parseFloat(data[0].abono) || 0
+          };
+          setMovimientos((prev) => [...prev, itemNuevo]);
         }
         setModalMovimiento(false);
         mostrarExito('¡Abono registrado con éxito!');
@@ -324,21 +366,32 @@ export default function App() {
     if (!nuevoNombre.trim()) return;
 
     try {
+      const payload = {
+        nombre: nuevoNombre.trim(),
+        'teléfono': nuevoTelefono.trim(),
+        telefono: nuevoTelefono.trim()
+      };
+
       const { data, error } = await supabase
         .from('clientes')
-        .insert([{ nombre: nuevoNombre.trim(), telefono: nuevoTelefono.trim() }])
+        .insert([payload])
         .select();
 
       if (error) throw error;
 
       if (data && data.length > 0) {
-        setClientes((prev) => [...prev, data[0]]);
-        setClienteActivoId(data[0].id);
+        const clienteCreado = {
+          ...data[0],
+          id: data[0].identificación || data[0].id,
+          telefono: data[0]['teléfono'] || data[0].telefono || ''
+        };
+        setClientes((prev) => [...prev, clienteCreado]);
+        setClienteActivoId(clienteCreado.id);
         setModalCliente(false);
         setNuevoNombre('');
         setNuevoTelefono('');
         setBusquedaCliente('');
-        mostrarExito(`¡Cliente "${data[0].nombre}" creado con éxito!`);
+        mostrarExito(`¡Cliente "${clienteCreado.nombre}" creado con éxito!`);
       }
     } catch (err) {
       alert('Error al crear cliente: ' + err.message);
@@ -349,7 +402,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-[#1B365D]" />
-        <p className="font-bold text-slate-600">Conectando con Supabase...</p>
+        <p className="font-bold text-slate-600">Sincronizando con Supabase...</p>
       </div>
     );
   }
@@ -357,7 +410,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 text-slate-800 relative">
       
-      {/* Notificación Toast Flotante Elegante */}
+      {/* Toast flotante */}
       {notificacion && (
         <div className="fixed top-5 right-5 z-[100] flex items-center gap-3 bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-2xl animate-bounce border border-emerald-400">
           <CheckCircle2 className="w-5 h-5 text-white shrink-0" />
@@ -401,10 +454,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Buscador y Tarjetas de Saldo */}
+        {/* Buscador y Resumen */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           
-          {/* Buscador Reactivo */}
+          {/* Buscador */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative" ref={dropdownRef}>
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
               Buscar o Elegir Cliente
@@ -432,7 +485,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Menú Desplegable */}
             {menuAbierto && (
               <div className="absolute left-0 right-0 top-[82px] bg-white border border-slate-200 rounded-xl shadow-xl z-30 max-h-56 overflow-y-auto p-1 divide-y divide-slate-100">
                 {clientesFiltrados.length === 0 ? (
@@ -581,7 +633,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Modal Registrar o Editar Movimiento (Con soporte multi-producto) */}
+        {/* Modal Registrar o Editar Movimiento */}
         {modalMovimiento && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
             <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-slate-200 my-8">
@@ -594,7 +646,6 @@ export default function App() {
 
               <form onSubmit={handleGuardarMovimiento} className="space-y-4">
                 
-                {/* Selector Tipo de Movimiento */}
                 {!editandoId && (
                   <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
                     <button
@@ -618,7 +669,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Fecha */}
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase">Fecha</label>
                   <input
@@ -630,7 +680,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* SECCIÓN 1: Venta con Múltiples Productos */}
                 {!editandoId && tipoMov === 'Compra' ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -653,7 +702,7 @@ export default function App() {
                           <input
                             type="text"
                             required
-                            placeholder={`Producto #${index + 1} (ej. Zapatos, Sandalias...)`}
+                            placeholder={`Producto #${index + 1}`}
                             value={item.detalle}
                             onChange={(e) => actualizarFilaProducto(index, 'detalle', e.target.value)}
                             className="flex-1 p-2 bg-white border border-slate-200 rounded-lg text-sm font-medium outline-none focus:ring-2 focus:ring-[#1B365D]"
@@ -684,14 +733,12 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Total acumulado de la compra */}
                     <div className="flex justify-between items-center bg-blue-50/70 p-3 rounded-xl border border-blue-200">
                       <span className="text-xs font-black text-[#1B365D] uppercase">Total de esta compra:</span>
                       <span className="text-lg font-black text-[#1B365D]">L. {totalCompraMultiple.toFixed(2)}</span>
                     </div>
                   </div>
                 ) : (
-                  /* SECCIÓN 2: Abono Simple o Modo Edición */
                   <>
                     <div>
                       <label className="text-xs font-bold text-slate-500 uppercase">
@@ -722,12 +769,11 @@ export default function App() {
                   </>
                 )}
 
-                {/* Notas generales */}
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase">Notas o Comentarios (Opcional)</label>
                   <input
                     type="text"
-                    placeholder="Ej. Pagó en efectivo, Transferencia BAC, Entrega viernes..."
+                    placeholder="Ej. Efectivo, BAC, Entrega..."
                     value={notas}
                     onChange={(e) => setNotas(e.target.value)}
                     className="w-full mt-1 p-3 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#1B365D]"
@@ -758,7 +804,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Modal Crear Nuevo Cliente */}
+        {/* Modal Nuevo Cliente */}
         {modalCliente && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
