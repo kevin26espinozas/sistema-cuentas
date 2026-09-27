@@ -42,7 +42,7 @@ export default function App() {
   const [fechaMov, setFechaMov] = useState('');
   const [notas, setNotas] = useState('');
 
-  // Lista dinámica de productos para compras múltiples
+  // Lista de productos para compras múltiples
   const [itemsCompra, setItemsCompra] = useState([{ detalle: '', monto: '' }]);
 
   // Campos para Abono o Edición
@@ -102,8 +102,8 @@ export default function App() {
       const movsNormalizados = (movsData || []).map((m) => ({
         ...m,
         id: m.identificación || m.id,
-        cliente_id: m.id_cliente,
-        cargo: parseFloat(m.cargo !== undefined ? m.cargo : m.carga) || 0,
+        cliente_id: m.cliente_id || m.id_cliente,
+        cargo: parseFloat(m.cargo !== undefined && m.cargo !== null ? m.cargo : m.carga) || 0,
         abono: parseFloat(m.abono) || 0
       }));
 
@@ -145,8 +145,8 @@ export default function App() {
     );
 
     const ordenados = [...filtrados].sort((a, b) => {
-      const fA = new Date(a.fecha || a.creado_en);
-      const fB = new Date(b.fecha || b.creado_en);
+      const fA = new Date(a.fecha || a.creado_en || a.created_at);
+      const fB = new Date(b.fecha || b.creado_en || b.created_at);
       return fA - fB;
     });
 
@@ -221,7 +221,7 @@ export default function App() {
         const { error } = await supabase
           .from('movimientos')
           .delete()
-          .eq('identificación', id);
+          .or(`identificación.eq.${id},id.eq.${id}`);
 
         if (error) throw error;
         setMovimientos((prev) => prev.filter((m) => m.id !== id));
@@ -232,7 +232,7 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento con nombres limpios
+  // Guardar movimiento enviando ambas columnas compatibles
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
@@ -243,11 +243,13 @@ export default function App() {
       if (editandoId) {
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         const payload = {
+          cliente_id: clienteActivo.id,
           id_cliente: clienteActivo.id,
           fecha: fechaFinal,
           tipo: tipoMov,
           detalle: detalleSimple.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Producto'),
           cargo: tipoMov === 'Compra' ? num : 0,
+          carga: tipoMov === 'Compra' ? num : 0,
           abono: tipoMov === 'Pago' ? num : 0,
           notas: notas.trim()
         };
@@ -255,17 +257,18 @@ export default function App() {
         const { data, error } = await supabase
           .from('movimientos')
           .update(payload)
-          .eq('identificación', editandoId)
+          .or(`identificación.eq.${editandoId},id.eq.${editandoId}`)
           .select();
 
         if (error) throw error;
         if (data && data.length > 0) {
+          const d = data[0];
           const itemActualizado = {
-            ...data[0],
-            id: data[0].identificación,
-            cliente_id: data[0].id_cliente,
-            cargo: parseFloat(data[0].cargo) || 0,
-            abono: parseFloat(data[0].abono) || 0
+            ...d,
+            id: d.identificación || d.id,
+            cliente_id: d.cliente_id || d.id_cliente,
+            cargo: parseFloat(d.cargo !== undefined && d.cargo !== null ? d.cargo : d.carga) || 0,
+            abono: parseFloat(d.abono) || 0
           };
           setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? itemActualizado : m)));
         }
@@ -278,16 +281,18 @@ export default function App() {
         });
 
         if (filasValidas.length === 0) {
-          alert('Por favor ingresa al menos un producto con descripción y monto válido.');
+          alert('Por favor ingresa al menos un producto con monto válido.');
           return;
         }
 
         const payloads = filasValidas.map((item) => ({
+          cliente_id: clienteActivo.id,
           id_cliente: clienteActivo.id,
           fecha: fechaFinal,
           tipo: 'Compra',
           detalle: item.detalle.trim(),
           cargo: parseFloat(String(item.monto).replace(',', '.')) || 0,
+          carga: parseFloat(String(item.monto).replace(',', '.')) || 0,
           abono: 0,
           notas: notas.trim()
         }));
@@ -298,34 +303,39 @@ export default function App() {
           .select();
 
         if (error) throw error;
+
         if (data && data.length > 0) {
           const itemsNuevos = data.map((d) => ({
             ...d,
-            id: d.identificación,
-            cliente_id: d.id_cliente,
-            cargo: parseFloat(d.cargo) || 0,
+            id: d.identificación || d.id,
+            cliente_id: d.cliente_id || d.id_cliente,
+            cargo: parseFloat(d.cargo !== undefined && d.cargo !== null ? d.cargo : d.carga) || 0,
             abono: parseFloat(d.abono) || 0
           }));
           setMovimientos((prev) => [...prev, ...itemsNuevos]);
         }
+
         setModalMovimiento(false);
         const mensaje = filasValidas.length === 1 
           ? '¡Producto guardado con éxito!' 
           : `¡${filasValidas.length} productos guardados con éxito!`;
         mostrarExito(mensaje);
       } else {
+        // Abono o Pago
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         if (num <= 0) {
-          alert('Por favor ingresa un monto válido para el abono.');
+          alert('Por favor ingresa un monto válido.');
           return;
         }
 
         const payload = {
+          cliente_id: clienteActivo.id,
           id_cliente: clienteActivo.id,
           fecha: fechaFinal,
           tipo: 'Pago',
           detalle: detalleSimple.trim() || 'Abono a cuenta',
           cargo: 0,
+          carga: 0,
           abono: num,
           notas: notas.trim()
         };
@@ -336,16 +346,19 @@ export default function App() {
           .select();
 
         if (error) throw error;
+
         if (data && data.length > 0) {
+          const d = data[0];
           const itemNuevo = {
-            ...data[0],
-            id: data[0].identificación,
-            cliente_id: data[0].id_cliente,
+            ...d,
+            id: d.identificación || d.id,
+            cliente_id: d.cliente_id || d.id_cliente,
             cargo: 0,
-            abono: parseFloat(data[0].abono) || 0
+            abono: parseFloat(d.abono) || 0
           };
           setMovimientos((prev) => [...prev, itemNuevo]);
         }
+
         setModalMovimiento(false);
         mostrarExito('¡Abono registrado con éxito!');
       }
@@ -362,21 +375,30 @@ export default function App() {
     try {
       const payload = {
         nombre: nuevoNombre.trim(),
-        'teléfono': nuevoTelefono.trim()
+        'teléfono': nuevoTelefono.trim(),
+        telefono: nuevoTelefono.trim()
       };
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('clientes')
         .insert([payload])
         .select();
 
+      if (error && error.message.includes('teléfono')) {
+        const payloadAlt = { nombre: nuevoNombre.trim(), telefono: nuevoTelefono.trim() };
+        const res = await supabase.from('clientes').insert([payloadAlt]).select();
+        data = res.data;
+        error = res.error;
+      }
+
       if (error) throw error;
 
       if (data && data.length > 0) {
+        const d = data[0];
         const clienteCreado = {
-          ...data[0],
-          id: data[0].identificación,
-          telefono: data[0]['teléfono'] || ''
+          ...d,
+          id: d.identificación || d.id,
+          telefono: d['teléfono'] || d.telefono || ''
         };
         setClientes((prev) => [...prev, clienteCreado]);
         setClienteActivoId(clienteCreado.id);
