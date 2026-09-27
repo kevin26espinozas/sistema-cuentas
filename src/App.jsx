@@ -103,7 +103,7 @@ export default function App() {
         ...m,
         id: m.identificación || m.id,
         cliente_id: m.id_cliente,
-        carga: parseFloat(m.carga) || 0,
+        cargo: parseFloat(m.cargo !== undefined ? m.cargo : m.carga) || 0,
         abono: parseFloat(m.abono) || 0
       }));
 
@@ -155,7 +155,7 @@ export default function App() {
     let pagos = 0;
 
     const calculados = ordenados.map((m) => {
-      const cargo = m.carga || 0;
+      const cargo = m.cargo || 0;
       const abono = m.abono || 0;
       compras += cargo;
       pagos += abono;
@@ -169,10 +169,10 @@ export default function App() {
     };
   }, [movimientos, clienteActivo]);
 
-  // Cálculo en vivo del subtotal de múltiples productos
+  // Subtotal en tiempo real
   const totalCompraMultiple = useMemo(() => {
     return itemsCompra.reduce((acc, curr) => {
-      const valor = parseFloat(curr.monto);
+      const valor = parseFloat(String(curr.monto).replace(',', '.'));
       return acc + (isNaN(valor) ? 0 : valor);
     }, 0);
   }, [itemsCompra]);
@@ -232,7 +232,7 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento con los nombres oficiales de columnas
+  // Guardar movimiento con nombres limpios
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
@@ -241,13 +241,13 @@ export default function App() {
 
     try {
       if (editandoId) {
-        const num = parseFloat(montoSimple) || 0;
+        const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         const payload = {
           id_cliente: clienteActivo.id,
           fecha: fechaFinal,
           tipo: tipoMov,
           detalle: detalleSimple.trim() || (tipoMov === 'Pago' ? 'Abono a cuenta' : 'Producto'),
-          carga: tipoMov === 'Compra' ? num : 0,
+          cargo: tipoMov === 'Compra' ? num : 0,
           abono: tipoMov === 'Pago' ? num : 0,
           notas: notas.trim()
         };
@@ -264,7 +264,7 @@ export default function App() {
             ...data[0],
             id: data[0].identificación,
             cliente_id: data[0].id_cliente,
-            carga: parseFloat(data[0].carga) || 0,
+            cargo: parseFloat(data[0].cargo) || 0,
             abono: parseFloat(data[0].abono) || 0
           };
           setMovimientos((prev) => prev.map((m) => (m.id === editandoId ? itemActualizado : m)));
@@ -272,7 +272,10 @@ export default function App() {
         setModalMovimiento(false);
         mostrarExito('¡Movimiento actualizado con éxito!');
       } else if (tipoMov === 'Compra') {
-        const filasValidas = itemsCompra.filter((item) => item.detalle.trim() && (parseFloat(item.monto) || 0) > 0);
+        const filasValidas = itemsCompra.filter((item) => {
+          const val = parseFloat(String(item.monto).replace(',', '.'));
+          return item.detalle.trim() && !isNaN(val) && val > 0;
+        });
 
         if (filasValidas.length === 0) {
           alert('Por favor ingresa al menos un producto con descripción y monto válido.');
@@ -284,7 +287,7 @@ export default function App() {
           fecha: fechaFinal,
           tipo: 'Compra',
           detalle: item.detalle.trim(),
-          carga: parseFloat(item.monto) || 0,
+          cargo: parseFloat(String(item.monto).replace(',', '.')) || 0,
           abono: 0,
           notas: notas.trim()
         }));
@@ -300,7 +303,7 @@ export default function App() {
             ...d,
             id: d.identificación,
             cliente_id: d.id_cliente,
-            carga: parseFloat(d.carga) || 0,
+            cargo: parseFloat(d.cargo) || 0,
             abono: parseFloat(d.abono) || 0
           }));
           setMovimientos((prev) => [...prev, ...itemsNuevos]);
@@ -311,7 +314,7 @@ export default function App() {
           : `¡${filasValidas.length} productos guardados con éxito!`;
         mostrarExito(mensaje);
       } else {
-        const num = parseFloat(montoSimple) || 0;
+        const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         if (num <= 0) {
           alert('Por favor ingresa un monto válido para el abono.');
           return;
@@ -322,7 +325,7 @@ export default function App() {
           fecha: fechaFinal,
           tipo: 'Pago',
           detalle: detalleSimple.trim() || 'Abono a cuenta',
-          carga: 0,
+          cargo: 0,
           abono: num,
           notas: notas.trim()
         };
@@ -338,7 +341,7 @@ export default function App() {
             ...data[0],
             id: data[0].identificación,
             cliente_id: data[0].id_cliente,
-            carga: 0,
+            cargo: 0,
             abono: parseFloat(data[0].abono) || 0
           };
           setMovimientos((prev) => [...prev, itemNuevo]);
