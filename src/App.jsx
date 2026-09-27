@@ -13,7 +13,8 @@ import {
   ChevronDown, 
   Plus, 
   X,
-  CheckCircle2
+  CheckCircle2,
+  RotateCw
 } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { generarEstadoCuentaPdf } from './utils/generatePdf';
@@ -23,6 +24,7 @@ export default function App() {
   const [clienteActivoId, setClienteActivoId] = useState('');
   const [movimientos, setMovimientos] = useState([]);
   const [cargando, setCargando] = useState(true);
+  const [recargando, setRecargando] = useState(false);
 
   // Toast flotante de éxito
   const [notificacion, setNotificacion] = useState(null);
@@ -42,7 +44,7 @@ export default function App() {
   const [fechaMov, setFechaMov] = useState('');
   const [notas, setNotas] = useState('');
 
-  // Lista de productos para compras múltiples
+  // Lista dinámica de productos para compras múltiples
   const [itemsCompra, setItemsCompra] = useState([{ detalle: '', monto: '' }]);
 
   // Campos para Abono o Edición
@@ -70,9 +72,11 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickAfuera);
   }, []);
 
-  // Cargar datos
-  const cargarDatos = async () => {
-    setCargando(true);
+  // Cargar datos desde Supabase
+  const cargarDatos = async (mostrarFeedback = false) => {
+    if (mostrarFeedback) setRecargando(true);
+    else setCargando(true);
+
     try {
       const { data: clientesData, error: errCli } = await supabase
         .from('clientes')
@@ -83,7 +87,7 @@ export default function App() {
 
       const clientesNormalizados = (clientesData || []).map((c) => ({
         ...c,
-        id: c.identificación || c.id,
+        id: c.id || c.identificación,
         telefono: c['teléfono'] || c.telefono || ''
       }));
 
@@ -101,17 +105,19 @@ export default function App() {
 
       const movsNormalizados = (movsData || []).map((m) => ({
         ...m,
-        id: m.identificación || m.id,
+        id: m.id || m.identificación,
         cliente_id: m.cliente_id || m.id_cliente,
         cargo: parseFloat(m.cargo !== undefined && m.cargo !== null ? m.cargo : m.carga) || 0,
         abono: parseFloat(m.abono) || 0
       }));
 
       setMovimientos(movsNormalizados);
+      if (mostrarFeedback) mostrarExito('Datos sincronizados en tiempo real.');
     } catch (error) {
       console.error('Error al cargar datos:', error.message);
     } finally {
       setCargando(false);
+      setRecargando(false);
     }
   };
 
@@ -215,13 +221,22 @@ export default function App() {
     setModalMovimiento(true);
   };
 
+  // Eliminar movimiento
   const handleEliminar = async (id, detalle) => {
     if (window.confirm(`¿Eliminar "${detalle}"?`)) {
       try {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('movimientos')
           .delete()
-          .or(`identificación.eq.${id},id.eq.${id}`);
+          .eq('id', id);
+
+        if (error && error.message.includes('id')) {
+          const res = await supabase
+            .from('movimientos')
+            .delete()
+            .eq('identificación', id);
+          error = res.error;
+        }
 
         if (error) throw error;
         setMovimientos((prev) => prev.filter((m) => m.id !== id));
@@ -232,7 +247,7 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento enviando ambas columnas compatibles
+  // Guardar movimiento (Nuevo o Editado)
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
@@ -241,6 +256,7 @@ export default function App() {
 
     try {
       if (editandoId) {
+        // MODO EDICIÓN
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         const payload = {
           cliente_id: clienteActivo.id,
@@ -254,18 +270,31 @@ export default function App() {
           notas: notas.trim()
         };
 
-        const { data, error } = await supabase
+        // Probar primero con 'id'
+        let { data, error } = await supabase
           .from('movimientos')
           .update(payload)
-          .or(`identificación.eq.${editandoId},id.eq.${editandoId}`)
+          .eq('id', editandoId)
           .select();
 
+        // Si la columna primaria en la BD fuera 'identificación', reintentar
+        if (error && error.message.includes('column') && error.message.includes('id')) {
+          const reintento = await supabase
+            .from('movimientos')
+            .update(payload)
+            .eq('identificación', editandoId)
+            .select();
+          data = reintento.data;
+          error = reintento.error;
+        }
+
         if (error) throw error;
+
         if (data && data.length > 0) {
           const d = data[0];
           const itemActualizado = {
             ...d,
-            id: d.identificación || d.id,
+            id: d.id || d.identificación,
             cliente_id: d.cliente_id || d.id_cliente,
             cargo: parseFloat(d.cargo !== undefined && d.cargo !== null ? d.cargo : d.carga) || 0,
             abono: parseFloat(d.abono) || 0
@@ -275,6 +304,7 @@ export default function App() {
         setModalMovimiento(false);
         mostrarExito('¡Movimiento actualizado con éxito!');
       } else if (tipoMov === 'Compra') {
+        // MODO NUEVA COMPRA (PRODUCTOS MÚLTIPLES)
         const filasValidas = itemsCompra.filter((item) => {
           const val = parseFloat(String(item.monto).replace(',', '.'));
           return item.detalle.trim() && !isNaN(val) && val > 0;
@@ -285,17 +315,20 @@ export default function App() {
           return;
         }
 
-        const payloads = filasValidas.map((item) => ({
-          cliente_id: clienteActivo.id,
-          id_cliente: clienteActivo.id,
-          fecha: fechaFinal,
-          tipo: 'Compra',
-          detalle: item.detalle.trim(),
-          cargo: parseFloat(String(item.monto).replace(',', '.')) || 0,
-          carga: parseFloat(String(item.monto).replace(',', '.')) || 0,
-          abono: 0,
-          notas: notas.trim()
-        }));
+        const payloads = filasValidas.map((item) => {
+          const mVal = parseFloat(String(item.monto).replace(',', '.')) || 0;
+          return {
+            cliente_id: clienteActivo.id,
+            id_cliente: clienteActivo.id,
+            fecha: fechaFinal,
+            tipo: 'Compra',
+            detalle: item.detalle.trim(),
+            cargo: mVal,
+            carga: mVal,
+            abono: 0,
+            notas: notas.trim()
+          };
+        });
 
         const { data, error } = await supabase
           .from('movimientos')
@@ -307,7 +340,7 @@ export default function App() {
         if (data && data.length > 0) {
           const itemsNuevos = data.map((d) => ({
             ...d,
-            id: d.identificación || d.id,
+            id: d.id || d.identificación,
             cliente_id: d.cliente_id || d.id_cliente,
             cargo: parseFloat(d.cargo !== undefined && d.cargo !== null ? d.cargo : d.carga) || 0,
             abono: parseFloat(d.abono) || 0
@@ -321,10 +354,10 @@ export default function App() {
           : `¡${filasValidas.length} productos guardados con éxito!`;
         mostrarExito(mensaje);
       } else {
-        // Abono o Pago
+        // MODO ABONO / PAGO
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         if (num <= 0) {
-          alert('Por favor ingresa un monto válido.');
+          alert('Por favor ingresa un monto válido para el abono.');
           return;
         }
 
@@ -351,7 +384,7 @@ export default function App() {
           const d = data[0];
           const itemNuevo = {
             ...d,
-            id: d.identificación || d.id,
+            id: d.id || d.identificación,
             cliente_id: d.cliente_id || d.id_cliente,
             cargo: 0,
             abono: parseFloat(d.abono) || 0
@@ -397,7 +430,7 @@ export default function App() {
         const d = data[0];
         const clienteCreado = {
           ...d,
-          id: d.identificación || d.id,
+          id: d.id || d.identificación,
           telefono: d['teléfono'] || d.telefono || ''
         };
         setClientes((prev) => [...prev, clienteCreado]);
@@ -443,6 +476,14 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => cargarDatos(true)}
+              title="Recargar datos de la base de datos"
+              disabled={recargando}
+              className="flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 p-3 rounded-xl font-bold transition-colors cursor-pointer"
+            >
+              <RotateCw className={`w-5 h-5 text-slate-600 ${recargando ? 'animate-spin' : ''}`} />
+            </button>
             <button
               onClick={() => setModalCliente(true)}
               className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-3 rounded-xl font-bold transition-colors cursor-pointer"
@@ -553,7 +594,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Tarjeta Saldo Inteligente */}
+          {/* Tarjeta Saldo Dinámico */}
           <div className={`p-4 rounded-2xl shadow-sm border flex items-center gap-4 ${
             totales.saldo > 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'
           }`}>
