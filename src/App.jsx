@@ -14,7 +14,9 @@ import {
   Plus, 
   X,
   CheckCircle2,
-  RotateCw
+  RotateCw,
+  Users,
+  AlertCircle
 } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { generarEstadoCuentaPdf } from './utils/generatePdf';
@@ -29,7 +31,7 @@ export default function App() {
   // Toast flotante de éxito
   const [notificacion, setNotificacion] = useState(null);
 
-  // Buscador de clientes
+  // Buscador de clientes en barra principal
   const [busquedaCliente, setBusquedaCliente] = useState('');
   const [menuAbierto, setMenuAbierto] = useState(false);
   const dropdownRef = useRef(null);
@@ -37,23 +39,22 @@ export default function App() {
   // Modales
   const [modalMovimiento, setModalMovimiento] = useState(false);
   const [modalCliente, setModalCliente] = useState(false);
+  const [modalGestionClientes, setModalGestionClientes] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
 
   // Formulario Movimiento
   const [tipoMov, setTipoMov] = useState('Compra');
   const [fechaMov, setFechaMov] = useState('');
   const [notas, setNotas] = useState('');
-
-  // Lista dinámica de productos para compras múltiples
   const [itemsCompra, setItemsCompra] = useState([{ detalle: '', monto: '' }]);
-
-  // Campos para Abono o Edición
   const [detalleSimple, setDetalleSimple] = useState('');
   const [montoSimple, setMontoSimple] = useState('');
 
-  // Formulario Cliente
-  const [nuevoNombre, setNuevoNombre] = useState('');
-  const [nuevoTelefono, setNuevoTelefono] = useState('');
+  // Formulario Cliente (Creación y Edición)
+  const [clienteEditando, setClienteEditando] = useState(null);
+  const [formNombreCliente, setFormNombreCliente] = useState('');
+  const [formTelefonoCliente, setFormTelefonoCliente] = useState('');
+  const [busquedaEnGestion, setBusquedaEnGestion] = useState('');
 
   const mostrarExito = (mensaje) => {
     setNotificacion(mensaje);
@@ -94,7 +95,10 @@ export default function App() {
       setClientes(clientesNormalizados);
 
       if (clientesNormalizados.length > 0) {
-        setClienteActivoId((prev) => (prev ? prev : clientesNormalizados[0].id));
+        setClienteActivoId((prev) => {
+          const existe = clientesNormalizados.some(c => String(c.id) === String(prev));
+          return existe ? prev : clientesNormalizados[0].id;
+        });
       }
 
       const { data: movsData, error: errMov } = await supabase
@@ -131,7 +135,7 @@ export default function App() {
     return clientes.find((c) => String(c.id) === String(clienteActivoId)) || clientes[0];
   }, [clientes, clienteActivoId]);
 
-  // Filtro en tiempo real para el buscador
+  // Filtro en tiempo real para el selector principal
   const clientesFiltrados = useMemo(() => {
     if (!busquedaCliente.trim()) return clientes;
     const q = busquedaCliente.toLowerCase();
@@ -140,7 +144,16 @@ export default function App() {
     );
   }, [clientes, busquedaCliente]);
 
-  // Filtrado y cálculo de saldos
+  // Lista de clientes filtrados para el modal de gestión
+  const clientesFiltradosGestion = useMemo(() => {
+    if (!busquedaEnGestion.trim()) return clientes;
+    const q = busquedaEnGestion.toLowerCase();
+    return clientes.filter(
+      (c) => c.nombre.toLowerCase().includes(q) || (c.telefono && c.telefono.includes(q))
+    );
+  }, [clientes, busquedaEnGestion]);
+
+  // Filtrado y cálculo de saldos del cliente activo
   const { listaFiltrada, totales } = useMemo(() => {
     if (!clienteActivo) {
       return { listaFiltrada: [], totales: { compras: 0, pagos: 0, saldo: 0 } };
@@ -175,7 +188,7 @@ export default function App() {
     };
   }, [movimientos, clienteActivo]);
 
-  // Subtotal en tiempo real
+  // Subtotal en tiempo real de compras múltiples
   const totalCompraMultiple = useMemo(() => {
     return itemsCompra.reduce((acc, curr) => {
       const valor = parseFloat(String(curr.monto).replace(',', '.'));
@@ -221,7 +234,7 @@ export default function App() {
     setModalMovimiento(true);
   };
 
-  // Eliminar movimiento
+  // Eliminar transacción
   const handleEliminar = async (id, detalle) => {
     if (window.confirm(`¿Eliminar "${detalle}"?`)) {
       try {
@@ -247,7 +260,7 @@ export default function App() {
     }
   };
 
-  // Guardar movimiento (Nuevo o Editado)
+  // Guardar transacción
   const handleGuardarMovimiento = async (e) => {
     e.preventDefault();
     if (!clienteActivo) return;
@@ -256,7 +269,6 @@ export default function App() {
 
     try {
       if (editandoId) {
-        // MODO EDICIÓN
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         const payload = {
           cliente_id: clienteActivo.id,
@@ -270,14 +282,12 @@ export default function App() {
           notas: notas.trim()
         };
 
-        // Probar primero con 'id'
         let { data, error } = await supabase
           .from('movimientos')
           .update(payload)
           .eq('id', editandoId)
           .select();
 
-        // Si la columna primaria en la BD fuera 'identificación', reintentar
         if (error && error.message.includes('column') && error.message.includes('id')) {
           const reintento = await supabase
             .from('movimientos')
@@ -304,7 +314,6 @@ export default function App() {
         setModalMovimiento(false);
         mostrarExito('¡Movimiento actualizado con éxito!');
       } else if (tipoMov === 'Compra') {
-        // MODO NUEVA COMPRA (PRODUCTOS MÚLTIPLES)
         const filasValidas = itemsCompra.filter((item) => {
           const val = parseFloat(String(item.monto).replace(',', '.'));
           return item.detalle.trim() && !isNaN(val) && val > 0;
@@ -354,7 +363,6 @@ export default function App() {
           : `¡${filasValidas.length} productos guardados con éxito!`;
         mostrarExito(mensaje);
       } else {
-        // MODO ABONO / PAGO
         const num = parseFloat(String(montoSimple).replace(',', '.')) || 0;
         if (num <= 0) {
           alert('Por favor ingresa un monto válido para el abono.');
@@ -400,49 +408,180 @@ export default function App() {
     }
   };
 
-  // Guardar nuevo cliente
+  // Abrir modal para crear cliente nuevo
+  const abrirModalCrearCliente = () => {
+    setClienteEditando(null);
+    setFormNombreCliente('');
+    setFormTelefonoCliente('');
+    setModalCliente(true);
+  };
+
+  // Abrir modal para editar cliente existente
+  const abrirModalModificarCliente = (cliente) => {
+    setClienteEditando(cliente);
+    setFormNombreCliente(cliente.nombre);
+    setFormTelefonoCliente(cliente.telefono || '');
+    setModalCliente(true);
+  };
+
+  // Guardar cliente con prevención de duplicados
   const handleGuardarCliente = async (e) => {
     e.preventDefault();
-    if (!nuevoNombre.trim()) return;
+    const nombreLimpio = formNombreCliente.trim();
+    const telLimpio = formTelefonoCliente.trim();
+
+    if (!nombreLimpio) {
+      alert('El nombre del cliente no puede estar vacío.');
+      return;
+    }
+
+    // 1. Verificación contra duplicados
+    const nombreRepetido = clientes.find((c) => {
+      const mismoNombre = c.nombre.trim().toLowerCase() === nombreLimpio.toLowerCase();
+      const esElMismo = clienteEditando ? String(c.id) === String(clienteEditando.id) : false;
+      return mismoNombre && !esElMismo;
+    });
+
+    if (nombreRepetido) {
+      alert(`¡Ya existe un cliente registrado con el nombre "${nombreRepetido.nombre}"! Usa un distintivo o selecciónalo directamente.`);
+      return;
+    }
+
+    if (telLimpio) {
+      const telRepetido = clientes.find((c) => {
+        const mismoTel = c.telefono && c.telefono.replace(/\D/g, '') === telLimpio.replace(/\D/g, '');
+        const esElMismo = clienteEditando ? String(c.id) === String(clienteEditando.id) : false;
+        return mismoTel && !esElMismo;
+      });
+
+      if (telRepetido) {
+        alert(`¡El teléfono ${telLimpio} ya está asignado al cliente "${telRepetido.nombre}"!`);
+        return;
+      }
+    }
 
     try {
-      const payload = {
-        nombre: nuevoNombre.trim(),
-        'teléfono': nuevoTelefono.trim(),
-        telefono: nuevoTelefono.trim()
-      };
+      if (clienteEditando) {
+        // ACTUALIZACIÓN DE CLIENTE EXISTENTE
+        const payload = {
+          nombre: nombreLimpio,
+          'teléfono': telLimpio,
+          telefono: telLimpio
+        };
 
-      let { data, error } = await supabase
+        let { data, error } = await supabase
+          .from('clientes')
+          .update(payload)
+          .eq('id', clienteEditando.id)
+          .select();
+
+        if (error && error.message.includes('id')) {
+          const res = await supabase
+            .from('clientes')
+            .update(payload)
+            .eq('identificación', clienteEditando.id)
+            .select();
+          data = res.data;
+          error = res.error;
+        }
+
+        if (error && error.message.includes('teléfono')) {
+          const payloadAlt = { nombre: nombreLimpio, telefono: telLimpio };
+          const res = await supabase
+            .from('clientes')
+            .update(payloadAlt)
+            .eq('id', clienteEditando.id)
+            .select();
+          data = res.data;
+          error = res.error;
+        }
+
+        if (error) throw error;
+
+        const clienteActualizado = {
+          ...clienteEditando,
+          nombre: nombreLimpio,
+          telefono: telLimpio
+        };
+
+        setClientes((prev) => prev.map((c) => (c.id === clienteEditando.id ? clienteActualizado : c)));
+        setModalCliente(false);
+        mostrarExito(`¡Cliente "${nombreLimpio}" actualizado con éxito!`);
+      } else {
+        // CREACIÓN DE NUEVO CLIENTE
+        const payload = {
+          nombre: nombreLimpio,
+          'teléfono': telLimpio,
+          telefono: telLimpio
+        };
+
+        let { data, error } = await supabase
+          .from('clientes')
+          .insert([payload])
+          .select();
+
+        if (error && error.message.includes('teléfono')) {
+          const payloadAlt = { nombre: nombreLimpio, telefono: telLimpio };
+          const res = await supabase.from('clientes').insert([payloadAlt]).select();
+          data = res.data;
+          error = res.error;
+        }
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          const d = data[0];
+          const clienteCreado = {
+            ...d,
+            id: d.id || d.identificación,
+            telefono: d['teléfono'] || d.telefono || ''
+          };
+          setClientes((prev) => [...prev, clienteCreado]);
+          setClienteActivoId(clienteCreado.id);
+          setModalCliente(false);
+          setBusquedaCliente('');
+          mostrarExito(`¡Cliente "${clienteCreado.nombre}" creado con éxito!`);
+        }
+      }
+    } catch (err) {
+      alert('Error al procesar cliente: ' + err.message);
+    }
+  };
+
+  // Eliminar cliente completo
+  const handleEliminarCliente = async (cliente) => {
+    const tieneMovimientos = movimientos.some(m => String(m.cliente_id) === String(cliente.id));
+    if (tieneMovimientos) {
+      const confirmar = window.confirm(
+        `ADVERTENCIA: El cliente "${cliente.nombre}" tiene transacciones o deudas registradas. Si lo eliminas, sus movimientos quedarán huérfanos. ¿Deseas eliminarlo de todos modos?`
+      );
+      if (!confirmar) return;
+    } else {
+      if (!window.confirm(`¿Seguro que deseas eliminar al cliente "${cliente.nombre}"?`)) return;
+    }
+
+    try {
+      let { error } = await supabase
         .from('clientes')
-        .insert([payload])
-        .select();
+        .delete()
+        .eq('id', cliente.id);
 
-      if (error && error.message.includes('teléfono')) {
-        const payloadAlt = { nombre: nuevoNombre.trim(), telefono: nuevoTelefono.trim() };
-        const res = await supabase.from('clientes').insert([payloadAlt]).select();
-        data = res.data;
+      if (error && error.message.includes('id')) {
+        const res = await supabase.from('clientes').delete().eq('identificación', cliente.id);
         error = res.error;
       }
 
       if (error) throw error;
 
-      if (data && data.length > 0) {
-        const d = data[0];
-        const clienteCreado = {
-          ...d,
-          id: d.id || d.identificación,
-          telefono: d['teléfono'] || d.telefono || ''
-        };
-        setClientes((prev) => [...prev, clienteCreado]);
-        setClienteActivoId(clienteCreado.id);
-        setModalCliente(false);
-        setNuevoNombre('');
-        setNuevoTelefono('');
-        setBusquedaCliente('');
-        mostrarExito(`¡Cliente "${clienteCreado.nombre}" creado con éxito!`);
+      setClientes((prev) => prev.filter((c) => c.id !== cliente.id));
+      if (String(clienteActivoId) === String(cliente.id)) {
+        const restantes = clientes.filter((c) => c.id !== cliente.id);
+        setClienteActivoId(restantes.length > 0 ? restantes[0].id : '');
       }
+
+      mostrarExito(`Cliente "${cliente.nombre}" eliminado.`);
     } catch (err) {
-      alert('Error al crear cliente: ' + err.message);
+      alert('Error al eliminar cliente: ' + err.message);
     }
   };
 
@@ -485,7 +624,14 @@ export default function App() {
               <RotateCw className={`w-5 h-5 text-slate-600 ${recargando ? 'animate-spin' : ''}`} />
             </button>
             <button
-              onClick={() => setModalCliente(true)}
+              onClick={() => setModalGestionClientes(true)}
+              className="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-[#1B365D] border border-indigo-200 px-4 py-3 rounded-xl font-bold transition-colors cursor-pointer"
+            >
+              <Users className="w-5 h-5 text-[#1B365D]" />
+              <span>Gestionar Clientes</span>
+            </button>
+            <button
+              onClick={abrirModalCrearCliente}
               className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-3 rounded-xl font-bold transition-colors cursor-pointer"
             >
               <UserPlus className="w-5 h-5" />
@@ -513,7 +659,7 @@ export default function App() {
         {/* Buscador y Resumen */}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           
-          {/* Buscador */}
+          {/* Buscador Principal */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 relative" ref={dropdownRef}>
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
               Buscar o Elegir Cliente
@@ -616,9 +762,20 @@ export default function App() {
         {/* Historial de Movimientos */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <h2 className="font-bold text-slate-700">
-              Historial de <span className="text-[#1B365D] underline font-black">{clienteActivo ? clienteActivo.nombre : '...'}</span>
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-slate-700">
+                Historial de <span className="text-[#1B365D] underline font-black">{clienteActivo ? clienteActivo.nombre : '...'}</span>
+              </h2>
+              {clienteActivo && (
+                <button
+                  onClick={() => abrirModalModificarCliente(clienteActivo)}
+                  title="Editar datos de este cliente"
+                  className="p-1 text-slate-400 hover:text-[#1B365D] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
             <span className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold">
               {listaFiltrada.length} movimientos
             </span>
@@ -860,31 +1017,37 @@ export default function App() {
           </div>
         )}
 
-        {/* Modal Nuevo Cliente */}
+        {/* Modal Crear o Editar Cliente */}
         {modalCliente && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-xl border border-slate-200">
-              <h3 className="text-xl font-black text-[#1B365D] mb-4">Agregar Nuevo Cliente</h3>
+              <h3 className="text-xl font-black text-[#1B365D] mb-1">
+                {clienteEditando ? 'Modificar Información del Cliente' : 'Agregar Nuevo Cliente'}
+              </h3>
+              <p className="text-xs text-slate-500 mb-4 font-semibold">
+                {clienteEditando ? `Editando cliente #${clienteEditando.id}` : 'El sistema previene registros con el mismo nombre o teléfono.'}
+              </p>
+
               <form onSubmit={handleGuardarCliente} className="space-y-4">
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase">Nombre Completo</label>
                   <input
                     type="text"
                     required
-                    placeholder="Nombre del cliente"
-                    value={nuevoNombre}
-                    onChange={(e) => setNuevoNombre(e.target.value)}
+                    placeholder="Ej. María López"
+                    value={formNombreCliente}
+                    onChange={(e) => setFormNombreCliente(e.target.value)}
                     className="w-full mt-1 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1B365D]"
                   />
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase">Teléfono</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Teléfono (Opcional)</label>
                   <input
                     type="text"
                     placeholder="Ej. 9988-7766"
-                    value={nuevoTelefono}
-                    onChange={(e) => setNuevoTelefono(e.target.value)}
+                    value={formTelefonoCliente}
+                    onChange={(e) => setFormTelefonoCliente(e.target.value)}
                     className="w-full mt-1 p-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-[#1B365D]"
                   />
                 </div>
@@ -901,10 +1064,126 @@ export default function App() {
                     type="submit"
                     className="flex-1 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-md active:scale-95 transition-transform cursor-pointer"
                   >
-                    Crear Cliente
+                    {clienteEditando ? 'Guardar Cambios' : 'Crear Cliente'}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Módulo de Gestión de Clientes */}
+        {modalGestionClientes && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-3xl shadow-2xl border border-slate-200 my-8">
+              
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div>
+                  <h3 className="text-xl font-black text-[#1B365D]">Directorio y Gestión de Clientes</h3>
+                  <p className="text-xs text-slate-500">Modifica datos o elimina clientes ({clientes.length} registrados)</p>
+                </div>
+                <button
+                  onClick={() => setModalGestionClientes(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Buscador dentro del modal de gestión */}
+              <div className="my-4 relative">
+                <input
+                  type="text"
+                  placeholder="Buscar en la lista por nombre o teléfono..."
+                  value={busquedaEnGestion}
+                  onChange={(e) => setBusquedaEnGestion(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#1B365D]"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+              </div>
+
+              {/* Tabla de clientes */}
+              <div className="overflow-x-auto max-h-96 overflow-y-auto rounded-xl border border-slate-100">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-100 text-slate-600 text-xs uppercase sticky top-0">
+                    <tr>
+                      <th className="p-3">Nombre</th>
+                      <th className="p-3">Teléfono</th>
+                      <th className="p-3 text-right">Saldo Actual</th>
+                      <th className="p-3 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {clientesFiltradosGestion.length === 0 ? (
+                      <tr>
+                        <td colSpan="4" className="p-6 text-center text-slate-400 font-medium">
+                          No se encontraron clientes coincidentes.
+                        </td>
+                      </tr>
+                    ) : (
+                      clientesFiltradosGestion.map((c) => {
+                        // Calcular saldo de este cliente específico
+                        const movsCliente = movimientos.filter(m => String(m.cliente_id) === String(c.id));
+                        const saldo = movsCliente.reduce((acc, m) => acc + (m.cargo - m.abono), 0);
+
+                        return (
+                          <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="p-3 font-bold text-slate-800">{c.nombre}</td>
+                            <td className="p-3 text-slate-500">{c.telefono || 'Sin teléfono'}</td>
+                            <td className="p-3 text-right font-black">
+                              <span className={saldo > 0 ? 'text-red-700' : 'text-emerald-700'}>
+                                L. {Math.abs(saldo).toFixed(2)}
+                                {saldo > 0 ? ' (Debe)' : saldo < 0 ? ' (A favor)' : ''}
+                              </span>
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-2">
+                                <button
+                                  onClick={() => {
+                                    setModalGestionClientes(false);
+                                    abrirModalModificarCliente(c);
+                                  }}
+                                  title="Editar nombre o teléfono"
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleEliminarCliente(c)}
+                                  title="Eliminar cliente"
+                                  className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-5 flex justify-between items-center pt-3 border-t border-slate-100">
+                <button
+                  onClick={() => {
+                    setModalGestionClientes(false);
+                    abrirModalCrearCliente();
+                  }}
+                  className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2.5 rounded-xl cursor-pointer transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Registrar otro cliente</span>
+                </button>
+                <button
+                  onClick={() => setModalGestionClientes(false)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer transition-colors"
+                >
+                  Cerrar
+                </button>
+              </div>
+
             </div>
           </div>
         )}
